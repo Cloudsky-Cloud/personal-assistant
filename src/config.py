@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     chroma_path: str = "/app/data/chroma"
     whisper_model_path: str = "/app/data/whisper"
 
+    # Weather (wttr.in — no API key required)
+    weather_city: str = ""
+    weather_country: str = ""
+
     # Scheduler
     briefing_time: str = "08:00"
     timezone: str = "UTC"

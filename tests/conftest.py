@@ -25,6 +25,7 @@ import pytest
 import src.integrations.google_scopes      # noqa: F401
 import src.integrations.google_auth        # noqa: F401
 import src.integrations.gmail              # noqa: F401
+import src.integrations.weather            # noqa: F401
 import src.integrations.gcalendar          # noqa: F401
 import src.integrations.gdrive             # noqa: F401
 import src.integrations.gtasks             # noqa: F401
