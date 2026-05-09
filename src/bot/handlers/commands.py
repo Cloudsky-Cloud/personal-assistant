@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 def _is_allowed(user_id: int) -> bool:
-    return not settings.telegram_allowed_users or user_id in settings.telegram_allowed_users
+    allowed = settings.allowed_user_ids()
+    return not allowed or user_id in allowed
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

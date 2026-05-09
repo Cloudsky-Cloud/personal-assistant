@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(pip *)",
+      "PowerShell(python -c \"import chromadb\" 2>&1; python -c \"import anthropic\" 2>&1)"
+    ]
+  }
+}

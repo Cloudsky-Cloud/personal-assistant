@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -7,7 +6,8 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str
-    telegram_allowed_users: list[int] = []
+    # Comma-separated user IDs: "111,222,333" — empty means no restriction
+    telegram_allowed_users: str = ""
 
     # Anthropic
     anthropic_api_key: str
@@ -30,12 +30,12 @@ class Settings(BaseSettings):
     whisper_model: str = "base"
     conversation_window: int = 30
 
-    @field_validator("telegram_allowed_users", mode="before")
-    @classmethod
-    def parse_allowed_users(cls, v):
-        if isinstance(v, str):
-            return [int(x.strip()) for x in v.split(",") if x.strip()]
-        return v
+    def allowed_user_ids(self) -> list[int]:
+        """Parse TELEGRAM_ALLOWED_USERS into a list of ints. Empty = no restriction."""
+        raw = self.telegram_allowed_users.strip()
+        if not raw:
+            return []
+        return [int(x.strip()) for x in raw.split(",") if x.strip()]
 
 
 settings = Settings()

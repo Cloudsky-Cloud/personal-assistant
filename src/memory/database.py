@@ -89,7 +89,7 @@ class Database:
         async with self._db.execute(
             """SELECT role, content, tool_calls, tool_call_id, created_at
                FROM conversations WHERE telegram_id = ?
-               ORDER BY created_at DESC LIMIT ?""",
+               ORDER BY created_at DESC, id DESC LIMIT ?""",
             (telegram_id, limit),
         ) as cur:
             rows = await cur.fetchall()

@@ -1,7 +1,4 @@
-import chromadb
-from chromadb.utils import embedding_functions
 from pathlib import Path
-
 from ..config import settings
 
 
@@ -11,6 +8,9 @@ class VectorStore:
         self._collection = None
 
     def init(self):
+        import chromadb
+        from chromadb.utils import embedding_functions
+
         Path(settings.chroma_path).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=settings.chroma_path)
         ef = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -23,7 +23,8 @@ class VectorStore:
         )
 
     def upsert_memory(self, doc_id: str, text: str, metadata: dict):
-        # ChromaDB requires metadata values to be str/int/float/bool
+        if self._collection is None:
+            return
         clean_meta = {k: v for k, v in metadata.items() if v is not None}
         self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[clean_meta])
 
@@ -34,6 +35,8 @@ class VectorStore:
         n_results: int = 5,
         where: dict | None = None,
     ) -> list[dict]:
+        if self._collection is None:
+            return []
         filter_clause: dict = {"telegram_id": telegram_id}
         if where:
             filter_clause.update(where)
@@ -57,6 +60,8 @@ class VectorStore:
         return output
 
     def delete_by_user(self, telegram_id: int):
+        if self._collection is None:
+            return
         self._collection.delete(where={"telegram_id": telegram_id})
 
 
