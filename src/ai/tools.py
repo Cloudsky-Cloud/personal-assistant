@@ -6,6 +6,7 @@ from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
+from ..memory.projects import projects_db
 
 # ── Tool Schemas ─────────────────────────────────────────────────────────────
 
@@ -235,6 +236,126 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "projects_create",
+        "description": (
+            "Create a new project in the local projects database. "
+            "Use when the user says 'add project', 'create project', or similar."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Project name"},
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "paused", "complete", "archived"],
+                    "description": "Initial status (default: active)",
+                },
+                "due_date": {
+                    "type": "string",
+                    "description": "Due date as ISO 8601 date e.g. 2026-05-16 (optional)",
+                },
+                "description": {"type": "string", "description": "Project description (optional)"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "projects_update",
+        "description": (
+            "Update a project's fields. "
+            "Use for 'mark X done', 'update X status to complete', 'rename X', etc. "
+            "project_name is a partial or full match against the stored name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name (or partial name) of the project to update"},
+                "new_name": {"type": "string", "description": "Rename the project to this value"},
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "paused", "complete", "archived"],
+                },
+                "due_date": {"type": "string", "description": "New due date as ISO 8601 e.g. 2026-05-16"},
+                "description": {"type": "string"},
+            },
+            "required": ["project_name"],
+        },
+    },
+    {
+        "name": "projects_list",
+        "description": (
+            "List projects from the local projects database. "
+            "Optionally filter by status or by due date. "
+            "For 'what's due this week' pass due_before as the end of the current week (ISO date). "
+            "Returns name, status, due_date, description, and note count."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "paused", "complete", "archived"],
+                    "description": "Filter by status (omit for all projects)",
+                },
+                "due_before": {
+                    "type": "string",
+                    "description": "Return only projects with due_date on or before this ISO date",
+                },
+            },
+        },
+    },
+    {
+        "name": "projects_delete",
+        "description": "Delete a project (and all its notes) by name.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Name (or partial name) of the project to delete"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "projects_add_note",
+        "description": (
+            "Add a note to an existing project. "
+            "Use when the user says 'add note to X', 'note for X: ...', etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name (or partial name) of the project"},
+                "content": {"type": "string", "description": "Note content"},
+            },
+            "required": ["project_name", "content"],
+        },
+    },
+    {
+        "name": "projects_get_notes",
+        "description": "Get all notes for a project, along with the project's details.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project_name": {"type": "string", "description": "Name (or partial name) of the project"},
+            },
+            "required": ["project_name"],
+        },
+    },
+    {
+        "name": "projects_search",
+        "description": (
+            "Search projects by keyword across name, description, and note content. "
+            "Use for 'find projects about X' or 'show projects mentioning Y'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search keyword"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -348,6 +469,47 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             if deleted == 0:
                 return {"error": f"No contact found matching '{tool_input['name']}'"}
             return {"status": "deleted", "count": deleted}
+
+        case "projects_create":
+            return projects_db.create(
+                name=tool_input["name"],
+                status=tool_input.get("status", "active"),
+                due_date=tool_input.get("due_date"),
+                description=tool_input.get("description", ""),
+            )
+
+        case "projects_update":
+            return projects_db.update(
+                tool_input["project_name"],
+                name=tool_input.get("new_name"),
+                status=tool_input.get("status"),
+                due_date=tool_input.get("due_date"),
+                description=tool_input.get("description"),
+            )
+
+        case "projects_list":
+            return projects_db.list_projects(
+                status=tool_input.get("status"),
+                due_before=tool_input.get("due_before"),
+            )
+
+        case "projects_delete":
+            deleted = projects_db.delete(tool_input["name"])
+            if deleted == 0:
+                return {"error": f"No project found matching '{tool_input['name']}'"}
+            return {"status": "deleted", "count": deleted}
+
+        case "projects_add_note":
+            return projects_db.add_note(
+                project_name=tool_input["project_name"],
+                content=tool_input["content"],
+            )
+
+        case "projects_get_notes":
+            return projects_db.get_notes(tool_input["project_name"])
+
+        case "projects_search":
+            return projects_db.search(tool_input["query"])
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])
