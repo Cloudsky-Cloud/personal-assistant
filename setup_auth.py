@@ -35,7 +35,16 @@ def main():
         return
 
     flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-    creds = flow.run_console()
+    flow.redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+    auth_url, _ = flow.authorization_url(prompt="consent")
+
+    print("\nOpen this URL in your browser:\n")
+    print(auth_url)
+    print()
+    code = input("Paste the authorization code here: ").strip()
+
+    flow.fetch_token(code=code)
+    creds = flow.credentials
     token_file.write_text(creds.to_json())
     print(f"\nAuthorization successful. Token saved to {token_file}")
     print("You can now start the bot with: docker-compose up -d")
