@@ -9,7 +9,7 @@ WORKDIR /app
 
 COPY pyproject.toml .
 RUN pip install --upgrade pip setuptools
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN pip install --no-cache-dir ".[dev]"
 
 # Pre-download Whisper base model so cold starts are fast
 RUN python -c "\
