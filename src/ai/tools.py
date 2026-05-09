@@ -5,6 +5,7 @@ from ..integrations.gcalendar import gcalendar
 from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
 from ..tasks.prioritizer import prioritizer
+from ..memory.contacts import contacts_db
 
 # ── Tool Schemas ─────────────────────────────────────────────────────────────
 
@@ -170,6 +171,49 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "gmail_send_email",
+        "description": (
+            "Compose and send an email via Gmail. "
+            "Use this when the user asks to send, write, or email someone. "
+            "Always confirm the recipient, subject, and body before sending."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient email address"},
+                "subject": {"type": "string", "description": "Email subject line"},
+                "body": {"type": "string", "description": "Full email body (plain text)"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+    {
+        "name": "contacts_lookup",
+        "description": (
+            "Look up a contact's email address by name from the local contacts database. "
+            "Use this when the user refers to a recipient by name rather than email address."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Contact name to search for"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "contacts_upsert",
+        "description": "Save or update a contact (name and email) in the local contacts database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "email": {"type": "string"},
+            },
+            "required": ["name", "email"],
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -256,6 +300,21 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
 
         case "tasks_complete":
             return gtasks.complete_task(tool_input["task_id"])
+
+        case "gmail_send_email":
+            return gmail.send_email(
+                to=tool_input["to"],
+                subject=tool_input["subject"],
+                body=tool_input["body"],
+            )
+
+        case "contacts_lookup":
+            result = contacts_db.lookup(tool_input["name"])
+            return result if result else {"error": f"No contact found for '{tool_input['name']}'"}
+
+        case "contacts_upsert":
+            contacts_db.upsert(tool_input["name"], tool_input["email"])
+            return {"status": "saved", "name": tool_input["name"], "email": tool_input["email"]}
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])

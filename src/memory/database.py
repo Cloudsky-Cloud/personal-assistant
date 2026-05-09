@@ -21,8 +21,9 @@ class Database:
             await self._db.close()
 
     async def _run_migrations(self):
-        sql_path = Path(__file__).parent.parent.parent / "migrations" / "001_initial.sql"
-        await self._db.executescript(sql_path.read_text())
+        migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+        for sql_file in sorted(migrations_dir.glob("*.sql")):
+            await self._db.executescript(sql_file.read_text())
         await self._db.commit()
 
     # ── Users ──────────────────────────────────────────────────────────────

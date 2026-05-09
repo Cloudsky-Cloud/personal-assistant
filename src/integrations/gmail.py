@@ -1,4 +1,6 @@
 import base64
+import email.mime.multipart
+import email.mime.text
 from typing import Optional
 from .google_auth import build_google_service
 
@@ -79,6 +81,17 @@ class Gmail:
                 id=msg_id,
                 body={"addLabelIds": [label_id]},
             ).execute()
+
+    def send_email(self, to: str, subject: str, body: str) -> dict:
+        msg = email.mime.multipart.MIMEMultipart()
+        msg["to"] = to
+        msg["subject"] = subject
+        msg.attach(email.mime.text.MIMEText(body, "plain"))
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        sent = self._svc().users().messages().send(
+            userId="me", body={"raw": raw}
+        ).execute()
+        return {"id": sent["id"], "to": to, "subject": subject}
 
 
 gmail = Gmail()
