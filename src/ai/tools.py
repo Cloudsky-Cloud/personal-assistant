@@ -195,10 +195,9 @@ TOOL_SCHEMAS = [
     {
         "name": "contacts_lookup",
         "description": (
-            "Look up contacts by name from the local contacts database. "
-            "Returns all matches (up to 10). "
-            "Use this when the user refers to a recipient by name rather than email address. "
-            "If multiple matches are returned, ask the user to clarify which one they mean."
+            "Look up contacts by name. Returns full contact details (email, phone, address, "
+            "company, notes, birthday) for all matches (up to 10). Falls back to Google Contacts "
+            "if not found locally. If multiple matches, ask the user to clarify."
         ),
         "input_schema": {
             "type": "object",
@@ -211,14 +210,24 @@ TOOL_SCHEMAS = [
     {
         "name": "contacts_upsert",
         "description": (
-            "Save or update a contact (name and email) in the local contacts database. "
-            "Use this when the user adds or updates a contact."
+            "Save or update a contact in the local database and Google Contacts. "
+            "Accepts full contact details. Only provided fields are updated — "
+            "omitted fields preserve their existing values."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string"},
-                "email": {"type": "string"},
+                "name":            {"type": "string"},
+                "email":           {"type": "string"},
+                "phone_mobile":    {"type": "string", "description": "Mobile phone number"},
+                "phone_work":      {"type": "string", "description": "Work phone number"},
+                "phone_home":      {"type": "string", "description": "Home phone number"},
+                "address_street":  {"type": "string"},
+                "address_city":    {"type": "string"},
+                "address_country": {"type": "string"},
+                "company":         {"type": "string", "description": "Company or organisation"},
+                "notes":           {"type": "string", "description": "Free-form notes"},
+                "birthday":        {"type": "string", "description": "YYYY-MM-DD or MM-DD"},
             },
             "required": ["name", "email"],
         },
@@ -472,17 +481,25 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                 google_results = gcontacts.search_contacts(tool_input["name"])
                 if google_results:
                     for c in google_results:
-                        contacts_db.upsert(c["name"], c["email"])
+                        extra = {k: v for k, v in c.items()
+                                 if k not in ("name", "email") and v is not None}
+                        contacts_db.upsert(c["name"], c["email"], **extra)
                     return {"contacts": google_results, "source": "google_contacts"}
             except Exception as exc:
                 logger.error("Google Contacts search failed for %r: %s", tool_input["name"], exc)
             return {"error": f"No contact found for '{tool_input['name']}'"}
 
         case "contacts_upsert":
-            contacts_db.upsert(tool_input["name"], tool_input["email"])
+            _extra_fields = [
+                "phone_mobile", "phone_work", "phone_home",
+                "address_street", "address_city", "address_country",
+                "company", "notes", "birthday",
+            ]
+            extra = {k: tool_input[k] for k in _extra_fields if tool_input.get(k) is not None}
+            contacts_db.upsert(tool_input["name"], tool_input["email"], **extra)
             google_status = {}
             try:
-                gcontacts.create_contact(tool_input["name"], tool_input["email"])
+                gcontacts.create_contact(tool_input["name"], tool_input["email"], **extra)
                 google_status = {"google_contacts": "saved"}
             except Exception as exc:
                 logger.error(
@@ -521,7 +538,9 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             except Exception as exc:
                 return {"error": f"Google Contacts sync failed: {exc}"}
             for c in google_contacts:
-                contacts_db.upsert(c["name"], c["email"])
+                extra = {k: v for k, v in c.items()
+                         if k not in ("name", "email") and v is not None}
+                contacts_db.upsert(c["name"], c["email"], **extra)
             return {"status": "synced", "imported": len(google_contacts)}
 
         case "projects_create":

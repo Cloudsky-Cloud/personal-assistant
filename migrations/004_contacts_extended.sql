@@ -1,0 +1,9 @@
+ALTER TABLE contacts ADD COLUMN phone_mobile TEXT;
+ALTER TABLE contacts ADD COLUMN phone_work   TEXT;
+ALTER TABLE contacts ADD COLUMN phone_home   TEXT;
+ALTER TABLE contacts ADD COLUMN address_street  TEXT;
+ALTER TABLE contacts ADD COLUMN address_city    TEXT;
+ALTER TABLE contacts ADD COLUMN address_country TEXT;
+ALTER TABLE contacts ADD COLUMN company  TEXT;
+ALTER TABLE contacts ADD COLUMN notes    TEXT;
+ALTER TABLE contacts ADD COLUMN birthday TEXT;

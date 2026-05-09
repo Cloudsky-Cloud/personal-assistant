@@ -21,10 +21,29 @@ class Database:
             await self._db.close()
 
     async def _run_migrations(self):
+        # Track which files have been applied so non-idempotent statements
+        # (e.g. ALTER TABLE ADD COLUMN) are never run twice.
+        await self._db.executescript("""
+            CREATE TABLE IF NOT EXISTS _migrations (
+                filename   TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        await self._db.commit()
+
         migrations_dir = Path(__file__).parent.parent.parent / "migrations"
         for sql_file in sorted(migrations_dir.glob("*.sql")):
+            filename = sql_file.name
+            async with self._db.execute(
+                "SELECT 1 FROM _migrations WHERE filename = ?", (filename,)
+            ) as cur:
+                if await cur.fetchone():
+                    continue
             await self._db.executescript(sql_file.read_text())
-        await self._db.commit()
+            await self._db.execute(
+                "INSERT INTO _migrations (filename) VALUES (?)", (filename,)
+            )
+            await self._db.commit()
 
     # ── Users ──────────────────────────────────────────────────────────────
 
