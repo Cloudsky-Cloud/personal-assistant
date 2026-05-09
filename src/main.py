@@ -1,17 +1,15 @@
 import asyncio
-import json
 import logging
 import signal
-from pathlib import Path
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .config import settings
 from .memory.database import db
 from .memory.vector_store import vector_store
 from .bot.telegram_bot import build_application
 from .scheduler.briefing import schedule_briefings
 from .scheduler.reminders import schedule_reminders
+from .startup import run_startup_checks
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,31 +19,57 @@ logging.basicConfig(
 logging.getLogger("chromadb.telemetry").setLevel(logging.CRITICAL)
 logger = logging.getLogger(__name__)
 
+_API_ENABLE_LINKS = {
+    "Gmail":             "https://console.cloud.google.com/apis/library/gmail.googleapis.com",
+    "Calendar":          "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com",
+    "Drive":             "https://console.cloud.google.com/apis/library/drive.googleapis.com",
+    "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
+    "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
+}
 
-def _check_google_token_scopes() -> None:
-    """Log the scopes on the saved OAuth token so misconfiguration is visible at startup."""
-    token_path = Path(settings.google_token_file)
-    if not token_path.exists():
-        logger.warning("Google token not found at %s — run setup_auth.py", token_path)
-        return
+_API_PROBES = [
+    ("Gmail", "gmail", "v1",
+     lambda svc: svc.users().getProfile(userId="me").execute()),
+    ("Calendar", "calendar", "v3",
+     lambda svc: svc.calendarList().list(maxResults=1).execute()),
+    ("Drive", "drive", "v3",
+     lambda svc: svc.files().list(pageSize=1, fields="files(id)").execute()),
+    ("Tasks", "tasks", "v1",
+     lambda svc: svc.tasklists().list(maxResults=1).execute()),
+    ("People (Contacts)", "people", "v1",
+     lambda svc: svc.people().get(resourceName="people/me", personFields="names").execute()),
+]
+
+
+def _check_google_apis() -> None:
+    """Probe each Google API at startup. Logs WARNING for disabled APIs — never crashes the bot."""
     try:
-        data = json.loads(token_path.read_text())
-        scopes = data.get("scopes") or []
-        logger.info("Google token scopes: %s", scopes)
-        contacts_scope = "https://www.googleapis.com/auth/contacts"
-        if contacts_scope not in scopes:
-            logger.error(
-                "Google token is MISSING scope %s — "
-                "delete %s and re-run: docker-compose run --rm bot python setup_auth.py",
-                contacts_scope, token_path,
-            )
+        from .integrations.google_auth import build_google_service
     except Exception as exc:
-        logger.warning("Could not read Google token scopes: %s", exc)
+        logger.warning("Google API health check skipped — could not load credentials: %s", exc)
+        return
+
+    for name, api_name, api_version, probe in _API_PROBES:
+        try:
+            svc = build_google_service(api_name, api_version)
+            probe(svc)
+            logger.info("Google %s API: OK", name)
+        except Exception as exc:
+            msg = str(exc)
+            if any(kw in msg for kw in ("has not been used", "disabled", "ACCESS_DISABLED")):
+                logger.warning(
+                    "Google %s API is not enabled — enable it at: %s",
+                    name,
+                    _API_ENABLE_LINKS.get(name, "https://console.cloud.google.com/apis"),
+                )
+            else:
+                logger.warning("Google %s API health check failed: %s", name, exc)
 
 
 async def main():
     logger.info("Starting personal assistant bot...")
-    _check_google_token_scopes()
+    run_startup_checks()
+    _check_google_apis()
 
     # Persistent storage
     await db.connect()

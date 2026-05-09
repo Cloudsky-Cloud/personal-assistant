@@ -4,14 +4,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 from ..config import settings
-
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/tasks",
-    "https://www.googleapis.com/auth/contacts",
-]
+from .google_scopes import SCOPES
 
 
 def get_credentials() -> Credentials:

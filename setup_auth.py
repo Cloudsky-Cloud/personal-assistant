@@ -9,17 +9,60 @@ or locally:
 Prints an authorization URL to open in your browser, then prompts for
 the code. Saves the token to data/google_token.json (persisted across
 container restarts via the volume).
+
+After authorization, verifies that each required Google API is enabled
+and prints a direct link for any that are not.
 """
+import sys
 from pathlib import Path
 from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/tasks",
-    "https://www.googleapis.com/auth/contacts",
+sys.path.insert(0, str(Path(__file__).parent))
+from src.integrations.google_scopes import SCOPES  # noqa: E402
+
+_API_ENABLE_LINKS = {
+    "Gmail":             "https://console.cloud.google.com/apis/library/gmail.googleapis.com",
+    "Calendar":          "https://console.cloud.google.com/apis/library/calendar-json.googleapis.com",
+    "Drive":             "https://console.cloud.google.com/apis/library/drive.googleapis.com",
+    "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
+    "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
+}
+
+_API_PROBES = [
+    ("Gmail",             "gmail",    "v1", lambda svc: svc.users().getProfile(userId="me").execute()),
+    ("Calendar",          "calendar", "v3", lambda svc: svc.calendarList().list(maxResults=1).execute()),
+    ("Drive",             "drive",    "v3", lambda svc: svc.files().list(pageSize=1, fields="files(id)").execute()),
+    ("Tasks",             "tasks",    "v1", lambda svc: svc.tasklists().list(maxResults=1).execute()),
+    ("People (Contacts)", "people",   "v1", lambda svc: svc.people().get(resourceName="people/me", personFields="names").execute()),
 ]
+
+
+def _verify_apis(creds) -> None:
+    print("\nVerifying that all required Google APIs are enabled...\n")
+    all_ok = True
+    for name, api_name, api_version, probe in _API_PROBES:
+        try:
+            svc = build(api_name, api_version, credentials=creds)
+            probe(svc)
+            print(f"  OK  {name}")
+        except Exception as exc:
+            msg = str(exc)
+            if any(kw in msg for kw in ("has not been used", "disabled", "ACCESS_DISABLED")):
+                link = _API_ENABLE_LINKS.get(name, "https://console.cloud.google.com/apis")
+                print(f"  DISABLED  {name}")
+                print(f"            Enable it at: {link}")
+                all_ok = False
+            else:
+                print(f"  WARN  {name}: {exc}")
+
+    if all_ok:
+        print("\nAll APIs are enabled. You're ready to start the bot.")
+    else:
+        print(
+            "\nSome APIs are disabled. Enable them using the links above,"
+            "\nthen wait ~1 minute before starting the bot."
+        )
 
 
 def main():
@@ -48,7 +91,8 @@ def main():
     creds = flow.credentials
     token_file.write_text(creds.to_json())
     print(f"\nAuthorization successful. Token saved to {token_file}")
-    print("You can now start the bot with: docker-compose up -d")
+
+    _verify_apis(creds)
 
 
 if __name__ == "__main__":

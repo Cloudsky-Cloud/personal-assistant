@@ -22,22 +22,24 @@ import pytest
 # importlib.import_module. Submodules only become attributes of their parent
 # package after they have been imported. Pre-import every module that tests
 # reference in patch() so the resolver can find them.
-import src.integrations.google_auth       # noqa: F401
-import src.integrations.gmail             # noqa: F401
-import src.integrations.gcalendar         # noqa: F401
-import src.integrations.gdrive            # noqa: F401
-import src.integrations.gtasks            # noqa: F401
-import src.integrations.gcontacts         # noqa: F401
-import src.memory.database                # noqa: F401
-import src.memory.contacts                # noqa: F401
-import src.memory.projects                # noqa: F401
-import src.memory.vector_store            # noqa: F401
-import src.memory.context_retriever       # noqa: F401
-import src.tasks.prioritizer              # noqa: F401
-import src.ai.tools                       # noqa: F401
-import src.ai.claude_client               # noqa: F401
-import src.bot.handlers.messages          # noqa: F401
-import src.bot.handlers.commands          # noqa: F401
+import src.integrations.google_scopes      # noqa: F401
+import src.integrations.google_auth        # noqa: F401
+import src.integrations.gmail              # noqa: F401
+import src.integrations.gcalendar          # noqa: F401
+import src.integrations.gdrive             # noqa: F401
+import src.integrations.gtasks             # noqa: F401
+import src.integrations.gcontacts          # noqa: F401
+import src.memory.database                 # noqa: F401
+import src.memory.contacts                 # noqa: F401
+import src.memory.projects                 # noqa: F401
+import src.memory.vector_store             # noqa: F401
+import src.memory.context_retriever        # noqa: F401
+import src.tasks.prioritizer               # noqa: F401
+import src.ai.tools                        # noqa: F401
+import src.ai.claude_client                # noqa: F401
+import src.bot.handlers.messages           # noqa: F401
+import src.bot.handlers.commands           # noqa: F401
+import src.startup                         # noqa: F401
 
 
 @pytest.fixture(autouse=True)

@@ -38,7 +38,8 @@ async def _check_reminders(bot):
                 start_dt = parse_dt(start_str)
                 if start_dt.tzinfo is None:
                     start_dt = start_dt.replace(tzinfo=timezone.utc)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Could not parse event start time %r: %s", start_str, exc)
                 continue
 
             minutes_until = (start_dt - now).total_seconds() / 60
