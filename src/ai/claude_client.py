@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import date
@@ -12,7 +13,8 @@ from ..memory.context_retriever import context_retriever
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
-You are a personal assistant with access to Gmail, Google Calendar, Google Drive, and Google Tasks.
+You are a personal assistant with access to Gmail, Google Calendar, Google Drive, Google Tasks, \
+a contacts database, a projects database, and web search.
 You are helpful, concise, and proactive. You remember past conversations and user preferences.
 
 Your Gmail capabilities include: reading emails, searching emails, marking as read, and SENDING emails.
@@ -50,6 +52,13 @@ You have a local projects database. Use the projects_* tools for any project or 
 - projects_get_notes: "show notes for X", "what are the X notes"
 - projects_search: "find projects about marketing", "projects mentioning budget"
 
+Web search capabilities:
+- web_search: general questions ("what is X", "how does X work", "find articles about X", \
+"look up X", "search for X"). Always include source URLs in your response.
+- web_search_news: current events and recent news ("latest news on X", "what happened with X", \
+"recent updates about X"). Always include source and date.
+Use web search proactively whenever the question requires current or broad factual knowledge.
+
 Format responses for Telegram: use Markdown, keep messages under 4000 characters.
 
 Today's date: {date}
@@ -57,6 +66,33 @@ Today's date: {date}
 Relevant context from past conversations:
 {context}
 """
+
+
+async def _call_tool_with_retry(name: str, inp: dict, max_attempts: int = 3) -> dict:
+    """Call dispatch_tool with exponential backoff. Returns an error dict after max_attempts."""
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return dispatch_tool(name, inp)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt  # 1 s, then 2 s
+                logger.warning(
+                    "Tool %s attempt %d/%d failed, retrying in %ds: %s",
+                    name, attempt + 1, max_attempts, wait, exc,
+                )
+                await asyncio.sleep(wait)
+            else:
+                logger.error(
+                    "Tool %s failed after %d attempts: %s", name, max_attempts, exc
+                )
+    return {
+        "error": (
+            f"Tool '{name}' failed after {max_attempts} attempts. "
+            f"Last error: {last_exc}"
+        )
+    }
 
 
 class ClaudeClient:
@@ -129,11 +165,7 @@ class ClaudeClient:
                 for block in response.content:
                     if block.type == "tool_use":
                         logger.info("Tool call: %s %s", block.name, block.input)
-                        try:
-                            result = dispatch_tool(block.name, block.input)
-                        except Exception as exc:
-                            logger.error("Tool %s failed: %s", block.name, exc)
-                            result = {"error": str(exc)}
+                        result = await _call_tool_with_retry(block.name, block.input)
                         tool_results.append(
                             {
                                 "type": "tool_result",
@@ -141,11 +173,9 @@ class ClaudeClient:
                                 "content": json.dumps(result, default=str),
                             }
                         )
-                # Append assistant's tool-use turn then the tool results
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
             else:
-                # Unexpected stop reason — return whatever text we have
                 return self._extract_text(response)
 
         return "I had trouble completing that request. Please try again."

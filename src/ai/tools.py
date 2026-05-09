@@ -5,6 +5,7 @@ from ..integrations.gmail import gmail
 from ..integrations.gcalendar import gcalendar
 from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
+from ..integrations.websearch import search_web, search_news
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
@@ -378,6 +379,38 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "web_search",
+        "description": (
+            "Search the web using DuckDuckGo. Use for general questions, factual lookups, "
+            "'what is X', 'how does X work', 'find articles about X', 'look up X'. "
+            "Returns titles, URLs, and snippets. Always cite sources in your response."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "web_search_news",
+        "description": (
+            "Search for recent news using DuckDuckGo. Use for current events, "
+            "'latest news on X', 'what happened with X', 'recent updates about X'. "
+            "Returns titles, URLs, dates, sources, and snippets."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "News search query"},
+                "max_results": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -583,6 +616,16 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
 
         case "projects_search":
             return projects_db.search(tool_input["query"])
+
+        case "web_search":
+            return search_web(
+                tool_input["query"], tool_input.get("max_results", 5)
+            )
+
+        case "web_search_news":
+            return search_news(
+                tool_input["query"], tool_input.get("max_results", 5)
+            )
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])
