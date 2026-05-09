@@ -27,6 +27,7 @@ _API_ENABLE_LINKS = {
     "Drive":             "https://console.cloud.google.com/apis/library/drive.googleapis.com",
     "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
+    "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
 }
 
 _API_PROBES = [
@@ -41,6 +42,7 @@ _API_PROBES = [
 def _verify_apis(creds) -> None:
     print("\nVerifying that all required Google APIs are enabled...\n")
     all_ok = True
+
     for name, api_name, api_version, probe in _API_PROBES:
         try:
             svc = build(api_name, api_version, credentials=creds)
@@ -55,6 +57,21 @@ def _verify_apis(creds) -> None:
                 all_ok = False
             else:
                 print(f"  WARN  {name}: {exc}")
+
+    # Cloud TTS uses its own client library (not the Discovery API builder)
+    try:
+        from google.cloud import texttospeech
+        client = texttospeech.TextToSpeechClient(credentials=creds)
+        client.list_voices(request=texttospeech.ListVoicesRequest(language_code="en-US"))
+        print("  OK  Cloud TTS")
+    except Exception as exc:
+        msg = str(exc)
+        if any(kw in msg for kw in ("has not been used", "disabled", "ACCESS_DISABLED")):
+            print(f"  DISABLED  Cloud TTS")
+            print(f"            Enable it at: {_API_ENABLE_LINKS['Cloud TTS']}")
+            all_ok = False
+        else:
+            print(f"  WARN  Cloud TTS: {exc}")
 
     if all_ok:
         print("\nAll APIs are enabled. You're ready to start the bot.")

@@ -30,7 +30,7 @@ import src.integrations.gcalendar          # noqa: F401
 import src.integrations.gdrive             # noqa: F401
 import src.integrations.gtasks             # noqa: F401
 import src.integrations.gcontacts          # noqa: F401
-import src.integrations.elevenlabs         # noqa: F401
+import src.integrations.gtts               # noqa: F401
 import src.integrations.websearch          # noqa: F401
 import src.memory.database                 # noqa: F401
 import src.memory.contacts                 # noqa: F401

@@ -19,6 +19,7 @@ Go to [Google Cloud Console](https://console.cloud.google.com/) and enable **all
 | Google Drive API | https://console.cloud.google.com/apis/library/drive.googleapis.com |
 | Google Tasks API | https://console.cloud.google.com/apis/library/tasks.googleapis.com |
 | People API (Contacts) | https://console.cloud.google.com/apis/library/people.googleapis.com |
+| Cloud Text-to-Speech API | https://console.cloud.google.com/apis/library/texttospeech.googleapis.com |
 
 After enabling, wait about **1 minute** before continuing.
 

@@ -25,6 +25,7 @@ _API_ENABLE_LINKS = {
     "Drive":             "https://console.cloud.google.com/apis/library/drive.googleapis.com",
     "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
+    "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
 }
 
 _API_PROBES = [
@@ -64,6 +65,21 @@ def _check_google_apis() -> None:
                 )
             else:
                 logger.warning("Google %s API health check failed: %s", name, exc)
+
+    # Cloud TTS uses its own client (not Discovery-based)
+    try:
+        from .integrations.gtts import probe as _tts_probe
+        _tts_probe()
+        logger.info("Google Cloud TTS API: OK")
+    except Exception as exc:
+        msg = str(exc)
+        if any(kw in msg for kw in ("has not been used", "disabled", "ACCESS_DISABLED")):
+            logger.warning(
+                "Google Cloud TTS API is not enabled — enable it at: %s",
+                _API_ENABLE_LINKS["Cloud TTS"],
+            )
+        else:
+            logger.warning("Google Cloud TTS API health check failed: %s", exc)
 
 
 async def main():

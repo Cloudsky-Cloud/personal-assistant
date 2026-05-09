@@ -4,4 +4,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/contacts",
+    # Required for Google Cloud Text-to-Speech
+    "https://www.googleapis.com/auth/cloud-platform",
 ]

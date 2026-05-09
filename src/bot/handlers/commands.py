@@ -63,14 +63,6 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
-        await update.message.reply_text(
-            "Voice output is not configured. "
-            "Add `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to your `.env` file.",
-            parse_mode="Markdown",
-        )
-        return
-
     await db.upsert_user(user.id, user.username or "", user.first_name or "")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
@@ -89,7 +81,7 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Then synthesise and send audio
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_voice")
     try:
-        from ...integrations.elevenlabs import text_to_speech
+        from ...integrations.gtts import text_to_speech
         audio_bytes = text_to_speech(response)
         buf = io.BytesIO(audio_bytes)
         buf.name = "response.mp3"

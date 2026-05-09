@@ -26,10 +26,6 @@ class Settings(BaseSettings):
     weather_city: str = ""
     weather_country: str = ""
 
-    # ElevenLabs (voice output — optional)
-    elevenlabs_api_key: str = ""
-    elevenlabs_voice_id: str = ""
-
     # Scheduler
     briefing_time: str = "08:00"
     timezone: str = "UTC"
