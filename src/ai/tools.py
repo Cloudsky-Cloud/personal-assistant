@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from ..integrations.gmail import gmail
@@ -8,6 +9,8 @@ from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
 from ..integrations.gcontacts import gcontacts
+
+logger = logging.getLogger(__name__)
 
 # ── Tool Schemas ─────────────────────────────────────────────────────────────
 
@@ -471,8 +474,8 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                     for c in google_results:
                         contacts_db.upsert(c["name"], c["email"])
                     return {"contacts": google_results, "source": "google_contacts"}
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Google Contacts search failed for %r: %s", tool_input["name"], exc)
             return {"error": f"No contact found for '{tool_input['name']}'"}
 
         case "contacts_upsert":
@@ -481,7 +484,11 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             try:
                 gcontacts.create_contact(tool_input["name"], tool_input["email"])
                 google_status = {"google_contacts": "saved"}
-            except Exception:
+            except Exception as exc:
+                logger.error(
+                    "Google Contacts create_contact failed for %r <%s>: %s",
+                    tool_input["name"], tool_input["email"], exc,
+                )
                 google_status = {"google_contacts": "local only (sync failed)"}
             return {
                 "status": "saved",
@@ -504,8 +511,8 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                 for c in local_matches:
                     if gcontacts.delete_contact_by_email(c["email"]):
                         google_deleted += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Google Contacts delete failed for %r: %s", tool_input["name"], exc)
             return {"status": "deleted", "count": deleted, "google_deleted": google_deleted}
 
         case "contacts_sync":

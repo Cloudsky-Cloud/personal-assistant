@@ -1,4 +1,8 @@
+import logging
+
 from .google_auth import build_google_service
+
+logger = logging.getLogger(__name__)
 
 
 class GContacts:
@@ -12,13 +16,16 @@ class GContacts:
 
     def create_contact(self, name: str, email: str) -> str:
         """Create a Google Contact. Returns the resource name (e.g. 'people/c123')."""
+        logger.info("Google Contacts: creating contact %r <%s>", name, email)
         result = self._svc().people().createContact(
             body={
                 "names": [{"givenName": name}],
                 "emailAddresses": [{"value": email, "type": "other"}],
             }
         ).execute()
-        return result["resourceName"]
+        resource_name = result["resourceName"]
+        logger.info("Google Contacts: created %s", resource_name)
+        return resource_name
 
     def search_contacts(self, query: str) -> list[dict]:
         """Search Google Contacts by name or email. Returns list of {name, email}."""
@@ -40,9 +47,12 @@ class GContacts:
 
     def delete_contact_by_email(self, email: str) -> bool:
         """Find and delete a Google Contact by email. Returns True if deleted."""
+        logger.info("Google Contacts: looking up resource name for <%s>", email)
         resource_name = self._find_resource_name_by_email(email)
         if not resource_name:
+            logger.warning("Google Contacts: no contact found for <%s>", email)
             return False
+        logger.info("Google Contacts: deleting %s", resource_name)
         self._svc().people().deleteContact(resourceName=resource_name).execute()
         return True
 
