@@ -60,3 +60,25 @@ def test_mark_read_calls_modify(mock_gmail_service):
             id="msg1",
             body={"removeLabelIds": ["UNREAD"]},
         )
+
+
+def test_send_email(mock_gmail_service):
+    mock_gmail_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+        "id": "sent123"
+    }
+    with patch("src.integrations.gmail.build_google_service", return_value=mock_gmail_service):
+        from src.integrations.gmail import Gmail
+        g = Gmail()
+        result = g.send_email(
+            to="recipient@example.com",
+            subject="Hello",
+            body="This is a test email.",
+        )
+        assert result["id"] == "sent123"
+        assert result["to"] == "recipient@example.com"
+        assert result["subject"] == "Hello"
+        send = mock_gmail_service.users.return_value.messages.return_value.send
+        send.assert_called_once()
+        call_kwargs = send.call_args.kwargs
+        assert call_kwargs["userId"] == "me"
+        assert "raw" in call_kwargs["body"]
