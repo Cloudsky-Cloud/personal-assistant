@@ -190,20 +190,25 @@ TOOL_SCHEMAS = [
     {
         "name": "contacts_lookup",
         "description": (
-            "Look up a contact's email address by name from the local contacts database. "
-            "Use this when the user refers to a recipient by name rather than email address."
+            "Look up contacts by name from the local contacts database. "
+            "Returns all matches (up to 10). "
+            "Use this when the user refers to a recipient by name rather than email address. "
+            "If multiple matches are returned, ask the user to clarify which one they mean."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Contact name to search for"},
+                "name": {"type": "string", "description": "Contact name (or partial name) to search for"},
             },
             "required": ["name"],
         },
     },
     {
         "name": "contacts_upsert",
-        "description": "Save or update a contact (name and email) in the local contacts database.",
+        "description": (
+            "Save or update a contact (name and email) in the local contacts database. "
+            "Use this when the user adds or updates a contact."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -211,6 +216,22 @@ TOOL_SCHEMAS = [
                 "email": {"type": "string"},
             },
             "required": ["name", "email"],
+        },
+    },
+    {
+        "name": "contacts_list",
+        "description": "List all contacts stored in the local contacts database.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "contacts_delete",
+        "description": "Delete a contact by name from the local contacts database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Name of the contact to delete"},
+            },
+            "required": ["name"],
         },
     },
     {
@@ -309,12 +330,24 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             )
 
         case "contacts_lookup":
-            result = contacts_db.lookup(tool_input["name"])
-            return result if result else {"error": f"No contact found for '{tool_input['name']}'"}
+            results = contacts_db.lookup(tool_input["name"])
+            if not results:
+                return {"error": f"No contact found for '{tool_input['name']}'"}
+            return {"contacts": results}
 
         case "contacts_upsert":
             contacts_db.upsert(tool_input["name"], tool_input["email"])
             return {"status": "saved", "name": tool_input["name"], "email": tool_input["email"]}
+
+        case "contacts_list":
+            contacts = contacts_db.list_all()
+            return {"contacts": contacts, "count": len(contacts)}
+
+        case "contacts_delete":
+            deleted = contacts_db.delete(tool_input["name"])
+            if deleted == 0:
+                return {"error": f"No contact found matching '{tool_input['name']}'"}
+            return {"status": "deleted", "count": deleted}
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])
