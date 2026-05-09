@@ -4,8 +4,8 @@ from telegram.ext import ContextTypes
 
 from ...config import settings
 from ...memory.database import db
-from ...ai.claude_client import claude_client
-from ...utils.formatting import format_task_list, truncate
+from ...utils.formatting import format_task_list
+from ...scheduler.briefing import build_briefing
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +39,8 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    response = await claude_client.chat(
-        telegram_id=user.id,
-        user_message=(
-            "Give me my daily briefing: "
-            "1) Summarize important unread emails from the last 24 hours. "
-            "2) List today's calendar events. "
-            "3) Show my top 5 tasks by priority. "
-            "Keep it concise."
-        ),
-        conversation_history=[],
-    )
-    await update.message.reply_text(truncate(response), parse_mode="Markdown")
+    text = await build_briefing()
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

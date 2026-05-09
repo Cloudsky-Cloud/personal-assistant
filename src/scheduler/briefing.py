@@ -236,6 +236,14 @@ async def _build_briefing(tz) -> str:
     return text
 
 
+# ── Public entry point (used by /briefing command) ───────────────────────────
+
+async def build_briefing() -> str:
+    """Build and return the full briefing text in the configured timezone."""
+    tz = pytz.timezone(settings.timezone)
+    return await _build_briefing(tz)
+
+
 # ── Scheduler entry point ─────────────────────────────────────────────────────
 
 async def _send_briefing(bot, telegram_id: int):
