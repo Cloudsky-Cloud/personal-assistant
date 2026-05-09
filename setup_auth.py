@@ -6,8 +6,9 @@ Run with:
 or locally:
     python setup_auth.py
 
-Opens a browser for the OAuth consent flow and saves the token to
-data/google_token.json (persisted across container restarts via the volume).
+Prints an authorization URL to open in your browser, then prompts for
+the code. Saves the token to data/google_token.json (persisted across
+container restarts via the volume).
 """
 from pathlib import Path
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -34,7 +35,7 @@ def main():
         return
 
     flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-    creds = flow.run_local_server(port=0)
+    creds = flow.run_console()
     token_file.write_text(creds.to_json())
     print(f"\nAuthorization successful. Token saved to {token_file}")
     print("You can now start the bot with: docker-compose up -d")
