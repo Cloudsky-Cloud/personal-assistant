@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY pyproject.toml .
+RUN pip install --upgrade pip setuptools
 RUN pip install --no-cache-dir -e ".[dev]"
 
 # Pre-download Whisper base model so cold starts are fast
