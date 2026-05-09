@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date, datetime, timezone
 
 import anthropic
@@ -16,6 +17,95 @@ from ..integrations.gtasks import gtasks
 from ..integrations.weather import get_weather
 
 logger = logging.getLogger(__name__)
+
+
+# ── Email filtering ───────────────────────────────────────────────────────────
+
+# Gmail query used to pre-filter server-side before fetching message bodies.
+# Strips promotions, social network pings, automated updates, and mailing lists.
+_EMAIL_QUERY = (
+    "is:unread "
+    "-category:promotions "
+    "-category:social "
+    "-category:updates "
+    "-category:forums"
+)
+
+# Local parts that are definitively not a real person.
+_NOREPLY_LOCAL_PARTS = frozenset({
+    "no-reply", "noreply", "donotreply", "do-not-reply", "do_not_reply",
+    "notification", "notifications",
+    "alert", "alerts",
+    "mailer", "mailer-daemon", "mailerdaemon",
+    "postmaster", "bounce", "bounces",
+    "newsletter", "newsletters",
+    "marketing", "promotions", "promo",
+    "automated", "automailer", "automatic",
+    "digest", "updates", "unsubscribe",
+})
+
+# Domains that only ever send automated mail.
+_AUTOMATED_DOMAINS = frozenset({
+    # Code / DevOps
+    "github.com", "githubusercontent.com",
+    "gitlab.com", "bitbucket.org",
+    # Professional / social networks
+    "linkedin.com", "bounce.linkedin.com",
+    "twitter.com", "x.com",
+    "facebook.com", "facebookmail.com",
+    "instagram.com", "pinterest.com",
+    "reddit.com", "tiktok.com", "youtube.com",
+    # Productivity SaaS
+    "slack.com", "notion.so", "trello.com",
+    "asana.com", "monday.com",
+    "atlassian.net", "jira.atlassian.com",
+    # Email delivery / marketing platforms
+    "mailchimp.com", "mailgun.org", "sendgrid.net",
+    "amazonses.com", "ses.amazonaws.com",
+    "mandrillapp.com", "sparkpostmail.com",
+    "constantcontact.com", "hubspot.com",
+    "klaviyo.com", "mailerlite.com",
+    "convertkit.com", "beehiiv.com",
+    # Publishing / newsletters
+    "substack.com", "medium.com",
+    # Google automated mail
+    "accounts.google.com", "no-reply.accounts.google.com",
+})
+
+# Subdomains of these roots are also automated (e.g. notifications.github.com).
+_AUTOMATED_DOMAIN_ROOTS = (
+    "github.com", "linkedin.com", "facebook.com",
+    "twitter.com", "x.com", "instagram.com",
+    "atlassian.net", "amazonses.com",
+)
+
+
+def _is_automated_sender(from_str: str) -> bool:
+    """Return True if the sender is an automated/no-reply address, not a real person."""
+    m = re.search(r"<([^>]+)>", from_str)
+    addr = m.group(1).lower() if m else from_str.lower().strip()
+    local, _, domain = addr.partition("@")
+    if not domain:
+        return False
+    # Exact local part
+    if local in _NOREPLY_LOCAL_PARTS:
+        return True
+    # Local part contains unmistakable no-reply signals
+    if "noreply" in local or "no-reply" in local or "donotreply" in local:
+        return True
+    # Exact domain
+    if domain in _AUTOMATED_DOMAINS:
+        return True
+    # Subdomain of a known automated root
+    for root in _AUTOMATED_DOMAIN_ROOTS:
+        if domain.endswith("." + root):
+            return True
+    return False
+
+
+def _filter_emails(emails: list[dict]) -> list[dict]:
+    """Return only emails that appear to be from real people."""
+    return [e for e in emails if not _is_automated_sender(e.get("from") or "")]
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -62,9 +152,9 @@ def _section_weather(city: str, country: str) -> str:
 
 def _section_emails(emails: list[dict]) -> str:
     if not emails:
-        return "📬 *Unread Emails*\nInbox is clear! 🎉"
+        return "📬 *Unread Emails*\nNo emails from real people — inbox is clear! 🎉"
     lines = [f"📬 *Unread Emails ({len(emails)})*"]
-    for e in emails[:5]:
+    for e in emails:
         subject = (e.get("subject") or "No subject")[:60].strip()
         sender = _clean_sender(e.get("from") or "Unknown")[:40]
         snippet = (e.get("snippet") or "").strip()[:100]
@@ -193,10 +283,15 @@ async def _build_briefing(tz) -> str:
         except Exception as exc:
             logger.warning("Briefing weather failed: %s", exc)
 
-    # Emails — top 5 unread
+    # Emails — top 5 from real people
+    # Fetch 15 after server-side category filtering, then strip automated senders.
     try:
-        emails = gmail.list_unread(max_results=5)
-        parts.append(_section_emails(emails))
+        raw = gmail.search(_EMAIL_QUERY, max_results=15)
+        human = _filter_emails(raw)[:5]
+        logger.info(
+            "Briefing emails: %d fetched, %d after filtering", len(raw), len(human)
+        )
+        parts.append(_section_emails(human))
     except Exception as exc:
         logger.warning("Briefing emails failed: %s", exc)
 
