@@ -40,6 +40,7 @@ def _check_google_token(errors: list[str]) -> bool:
     try:
         data = json.loads(token_path.read_text())
         token_scopes = set(data.get("scopes") or [])
+        logger.info("Google token scopes (%d): %s", len(token_scopes), sorted(token_scopes))
         missing = [s for s in SCOPES if s not in token_scopes]
         if missing:
             errors.append(
