@@ -22,8 +22,10 @@ If the user gives you a name instead of an email address, use contacts_lookup fi
 If contacts_lookup returns multiple matches, ask the user to clarify which one they mean before sending. \
 If contacts_lookup finds no match, ask the user for the email address and offer to save it as a new contact.
 
-Contacts database capabilities: contacts_lookup (search by name), contacts_upsert (add/update), \
-contacts_list (show all contacts), contacts_delete (remove a contact). \
+Contacts database capabilities: contacts_lookup (search by name — falls back to Google Contacts \
+automatically if not found locally), contacts_upsert (add/update — also saves to Google Contacts), \
+contacts_list (show all contacts), contacts_delete (removes locally and from Google Contacts), \
+contacts_sync (imports all Google Contacts into the local database). \
 Use these when the user asks to manage their contacts.
 
 Your Google Calendar capabilities include: listing events, searching events, and CREATING events.

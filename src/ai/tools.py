@@ -7,6 +7,7 @@ from ..integrations.gtasks import gtasks
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
+from ..integrations.gcontacts import gcontacts
 
 # ── Tool Schemas ─────────────────────────────────────────────────────────────
 
@@ -226,7 +227,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "contacts_delete",
-        "description": "Delete a contact by name from the local contacts database.",
+        "description": "Delete a contact by name from the local contacts database and from Google Contacts.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -234,6 +235,15 @@ TOOL_SCHEMAS = [
             },
             "required": ["name"],
         },
+    },
+    {
+        "name": "contacts_sync",
+        "description": (
+            "Import all Google Contacts into the local contacts database. "
+            "Use when the user says 'sync contacts', 'import contacts from Google', "
+            "or 'pull my Google Contacts'."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "projects_create",
@@ -452,23 +462,60 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
 
         case "contacts_lookup":
             results = contacts_db.lookup(tool_input["name"])
-            if not results:
-                return {"error": f"No contact found for '{tool_input['name']}'"}
-            return {"contacts": results}
+            if results:
+                return {"contacts": results}
+            # Fallback: search Google Contacts and auto-import any matches
+            try:
+                google_results = gcontacts.search_contacts(tool_input["name"])
+                if google_results:
+                    for c in google_results:
+                        contacts_db.upsert(c["name"], c["email"])
+                    return {"contacts": google_results, "source": "google_contacts"}
+            except Exception:
+                pass
+            return {"error": f"No contact found for '{tool_input['name']}'"}
 
         case "contacts_upsert":
             contacts_db.upsert(tool_input["name"], tool_input["email"])
-            return {"status": "saved", "name": tool_input["name"], "email": tool_input["email"]}
+            google_status = {}
+            try:
+                gcontacts.create_contact(tool_input["name"], tool_input["email"])
+                google_status = {"google_contacts": "saved"}
+            except Exception:
+                google_status = {"google_contacts": "local only (sync failed)"}
+            return {
+                "status": "saved",
+                "name": tool_input["name"],
+                "email": tool_input["email"],
+                **google_status,
+            }
 
         case "contacts_list":
             contacts = contacts_db.list_all()
             return {"contacts": contacts, "count": len(contacts)}
 
         case "contacts_delete":
+            local_matches = contacts_db.lookup(tool_input["name"])
             deleted = contacts_db.delete(tool_input["name"])
             if deleted == 0:
                 return {"error": f"No contact found matching '{tool_input['name']}'"}
-            return {"status": "deleted", "count": deleted}
+            google_deleted = 0
+            try:
+                for c in local_matches:
+                    if gcontacts.delete_contact_by_email(c["email"]):
+                        google_deleted += 1
+            except Exception:
+                pass
+            return {"status": "deleted", "count": deleted, "google_deleted": google_deleted}
+
+        case "contacts_sync":
+            try:
+                google_contacts = gcontacts.list_contacts()
+            except Exception as exc:
+                return {"error": f"Google Contacts sync failed: {exc}"}
+            for c in google_contacts:
+                contacts_db.upsert(c["name"], c["email"])
+            return {"status": "synced", "imported": len(google_contacts)}
 
         case "projects_create":
             return projects_db.create(
