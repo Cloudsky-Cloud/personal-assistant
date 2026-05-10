@@ -124,4 +124,60 @@ class GoogleFit:
         return results
 
 
+    @staticmethod
+    def compute_energy_score(summary: dict) -> dict:
+        """Return {"score": 0-100, "level": "low"|"medium"|"high"} from a get_summary() dict."""
+        score = 0
+
+        # Sleep: 0–40 pts (optimal 7–9 h)
+        total_min = summary.get("sleep", {}).get("total_minutes") or 0
+        hours = total_min / 60
+        if 7 <= hours <= 9:
+            score += 40
+        elif hours > 9:
+            score += 30
+        elif 6 <= hours < 7:
+            score += 28
+        elif 5 <= hours < 6:
+            score += 15
+        elif 4 <= hours < 5:
+            score += 7
+
+        # Resting HR: 0–25 pts (lower = better; None = neutral 13)
+        bpm = summary.get("heart_rate", {}).get("bpm")
+        if bpm is None:
+            score += 13
+        elif bpm < 50:
+            score += 25
+        elif bpm < 60:
+            score += 22
+        elif bpm < 70:
+            score += 18
+        elif bpm < 80:
+            score += 12
+        elif bpm < 90:
+            score += 6
+
+        # Active minutes: 0–20 pts (linear, 60 min = full score)
+        active = summary.get("active_minutes", {}).get("minutes") or 0
+        score += min(20, int(active / 3))
+
+        # Steps: 0–15 pts
+        steps = summary.get("steps", {}).get("steps") or 0
+        if steps >= 10_000:
+            score += 15
+        elif steps >= 7_500:
+            score += 12
+        elif steps >= 5_000:
+            score += 8
+        elif steps >= 2_500:
+            score += 4
+        elif steps >= 1_000:
+            score += 2
+
+        score = min(100, score)
+        level = "high" if score >= 71 else ("medium" if score >= 40 else "low")
+        return {"score": score, "level": level}
+
+
 google_fit = GoogleFit()

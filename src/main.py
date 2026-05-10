@@ -10,6 +10,7 @@ from .bot.telegram_bot import build_application
 from .scheduler.briefing import schedule_briefings
 from .scheduler.reminders import schedule_reminders
 from .scheduler.dream import schedule_dream_cycle
+from .scheduler.fitness_alerts import schedule_fitness_alerts
 from .startup import run_startup_checks
 
 logging.basicConfig(
@@ -27,6 +28,7 @@ _API_ENABLE_LINKS = {
     "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
     "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
+    "Fitness":           "https://console.cloud.google.com/apis/library/fitness.googleapis.com",
 }
 
 _API_PROBES = [
@@ -40,6 +42,8 @@ _API_PROBES = [
      lambda svc: svc.tasklists().list(maxResults=1).execute()),
     ("People (Contacts)", "people", "v1",
      lambda svc: svc.people().get(resourceName="people/me", personFields="names").execute()),
+    ("Fitness", "fitness", "v1",
+     lambda svc: svc.users().dataSources().list(userId="me").execute()),
 ]
 
 
@@ -101,6 +105,7 @@ async def main():
     schedule_briefings(scheduler, app.bot)
     schedule_reminders(scheduler, app.bot)
     schedule_dream_cycle(scheduler)
+    schedule_fitness_alerts(scheduler, app.bot)
     scheduler.start()
     logger.info("Scheduler started")
 

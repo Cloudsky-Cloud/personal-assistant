@@ -15,7 +15,7 @@ from ..integrations.gmail import gmail
 from ..integrations.gcalendar import gcalendar
 from ..integrations.gtasks import gtasks
 from ..integrations.weather import get_weather
-from ..integrations.google_fit import google_fit
+from ..integrations.google_fit import GoogleFit, google_fit
 
 logger = logging.getLogger(__name__)
 
@@ -266,14 +266,85 @@ def _section_tasks(
     return "\n".join(lines)
 
 
-def _section_fitness(fit: dict) -> str:
+_HIGH_STAKES_KEYWORDS = frozenset({
+    "interview", "presentation", "review", "board", "client",
+    "performance", "evaluation", "demo", "pitch", "surgery", "procedure",
+    "deposition", "hearing", "audit",
+})
+
+
+def _find_high_stakes_events(events: list[dict], tz) -> list[str]:
+    today = datetime.now(tz).date()
+    results = []
+    for e in events:
+        start_str = e.get("start", "")
+        if not start_str:
+            continue
+        try:
+            dt = parse_dt(start_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            dt_local = dt.astimezone(tz)
+            if dt_local.date() != today:
+                continue
+            title = e.get("summary", "")
+            lower = title.lower()
+            is_high_stakes = (
+                any(kw in lower for kw in _HIGH_STAKES_KEYWORDS)
+                or len(e.get("attendees", [])) >= 3
+            )
+            if is_high_stakes:
+                time_str = dt_local.strftime("%I:%M %p").lstrip("0")
+                results.append(f"{time_str} — {title}")
+        except Exception:
+            pass
+    return results
+
+
+def _energy_alert_text(score: int, level: str, sleep: dict, hr: dict, events: list[dict], tz) -> str:
+    if level == "low":
+        h, m = sleep.get("hours", 0) or 0, sleep.get("minutes", 0) or 0
+        sleep_str = f"{h}h {m}m" if sleep.get("hours") is not None else "unknown"
+        bpm = hr.get("bpm")
+        bpm_note = f" · ❤️ HR: {bpm} bpm (elevated)" if bpm and bpm > 80 else ""
+        lines = [f"🔴 *Low Energy* (score: {score}/100)"]
+        lines.append(f"Poor sleep detected ({sleep_str}){bpm_note}.")
+        high_stakes = _find_high_stakes_events(events, tz)
+        if high_stakes:
+            lines.append(f"⚠️ High-stakes events today:")
+            for ev in high_stakes[:3]:
+                lines.append(f"  • {ev}")
+        lines.append("💡 Defer non-critical tasks. Avoid major decisions before noon.")
+        lines.append("🧠 Best focus window: 10–11 AM.")
+        return "\n".join(lines)
+
+    if level == "medium":
+        lines = [f"🟡 *Average Recovery* (score: {score}/100)"]
+        lines.append("Stay hydrated and take short breaks between meetings.")
+        lines.append("🧠 Best focus window: 9–11 AM.")
+        return "\n".join(lines)
+
+    # high
+    lines = [f"🟢 *Great Recovery!* (score: {score}/100)"]
+    lines.append("Good day for deep work and important decisions.")
+    lines.append("🧠 Prime hours: all morning — tackle your hardest tasks first.")
+    return "\n".join(lines)
+
+
+def _section_fitness(fit: dict, energy: dict, events: list[dict], tz) -> str:
     steps = fit.get("steps", {})
     sleep = fit.get("sleep", {})
     hr = fit.get("heart_rate", {})
     cal = fit.get("calories", {})
     active = fit.get("active_minutes", {})
+    score = energy.get("score")
+    level = energy.get("level", "medium")
 
     lines = ["💪 *Health & Fitness*"]
+
+    if score is not None:
+        level_emoji = {"low": "🔴", "medium": "🟡", "high": "🟢"}.get(level, "⚪")
+        lines.append(f"🔋 Energy score: {score}/100 {level_emoji}")
 
     s = steps.get("steps")
     if s is not None:
@@ -298,6 +369,11 @@ def _section_fitness(fit: dict) -> str:
 
     if len(lines) == 1:
         return ""
+
+    if score is not None:
+        lines.append("")
+        lines.append(_energy_alert_text(score, level, sleep, hr, events, tz))
+
     return "\n".join(lines)
 
 
@@ -351,6 +427,7 @@ async def _build_briefing(tz) -> str:
     all_tasks: list[dict] = []
     active_projects: list[dict] = []
     fit_data: dict = {}
+    energy_data: dict = {}
 
     try:
         raw = gmail.search(_EMAIL_QUERY, max_results=15)
@@ -376,7 +453,22 @@ async def _build_briefing(tz) -> str:
 
     try:
         fit_data = google_fit.get_summary()
-        logger.info("Briefing fitness: fetched")
+        energy_data = GoogleFit.compute_energy_score(fit_data)
+        sleep_d = fit_data.get("sleep", {})
+        hr_d = fit_data.get("heart_rate", {})
+        steps_d = fit_data.get("steps", {})
+        active_d = fit_data.get("active_minutes", {})
+        await db.save_energy_score(
+            date_str=today.isoformat(),
+            score=energy_data["score"],
+            level=energy_data["level"],
+            sleep_hours=sleep_d.get("hours"),
+            sleep_minutes=sleep_d.get("minutes"),
+            heart_rate_bpm=hr_d.get("bpm"),
+            steps=steps_d.get("steps"),
+            active_minutes=active_d.get("minutes"),
+        )
+        logger.info("Briefing fitness: score=%d (%s)", energy_data["score"], energy_data["level"])
     except Exception as exc:
         logger.warning("Briefing fitness failed: %s", exc)
 
@@ -446,7 +538,7 @@ async def _build_briefing(tz) -> str:
             logger.warning("Briefing weather failed: %s", exc)
 
     try:
-        section = _section_fitness(fit_data)
+        section = _section_fitness(fit_data, energy_data, all_events, tz)
         if section:
             parts.append(section)
     except Exception as exc:

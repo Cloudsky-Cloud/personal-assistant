@@ -9,6 +9,7 @@ from ..integrations.gtasks import gtasks
 from ..integrations.websearch import search_web, search_news
 from ..integrations.gbrain import gbrain, contact_slug, contact_to_page
 from ..integrations.google_fit import google_fit
+from ..memory.database import db
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
@@ -521,6 +522,25 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "energy_history",
+        "description": (
+            "Get recent daily energy scores (0–100) computed from Google Fit data. "
+            "Each record includes date, score, level (low/medium/high), sleep, heart rate, steps, and active minutes. "
+            "Use when the user asks about energy trends, recovery patterns, 'how has my energy been', "
+            "'how many low energy days', or when deciding which tasks to surface based on energy level."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "default": 7,
+                    "description": "Number of recent days to return (default: 7, max: 30)",
+                }
+            },
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -808,7 +828,14 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                 case "active_minutes":
                     return google_fit.get_active_minutes()
                 case _:
-                    return google_fit.get_summary()
+                    summary = google_fit.get_summary()
+                    from ..integrations.google_fit import GoogleFit
+                    energy = GoogleFit.compute_energy_score(summary)
+                    return {**summary, "energy": energy}
+
+        case "energy_history":
+            days = min(tool_input.get("days", 7), 30)
+            return await db.get_energy_scores(days)
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])

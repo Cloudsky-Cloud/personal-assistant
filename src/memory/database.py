@@ -179,6 +179,49 @@ class Database:
         )
         await self._db.commit()
 
+    # ── Energy scores ──────────────────────────────────────────────────────
+
+    async def save_energy_score(
+        self,
+        date_str: str,
+        score: int,
+        level: str,
+        sleep_hours=None,
+        sleep_minutes=None,
+        heart_rate_bpm=None,
+        steps=None,
+        active_minutes=None,
+    ):
+        await self._db.execute(
+            """INSERT INTO energy_scores
+               (date, score, level, sleep_hours, sleep_minutes, heart_rate_bpm, steps, active_minutes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+               score=excluded.score, level=excluded.level,
+               sleep_hours=excluded.sleep_hours, sleep_minutes=excluded.sleep_minutes,
+               heart_rate_bpm=excluded.heart_rate_bpm, steps=excluded.steps,
+               active_minutes=excluded.active_minutes""",
+            (date_str, score, level, sleep_hours, sleep_minutes, heart_rate_bpm, steps, active_minutes),
+        )
+        await self._db.commit()
+
+    async def get_energy_scores(self, days: int = 7) -> list[dict]:
+        async with self._db.execute(
+            """SELECT date, score, level, sleep_hours, sleep_minutes, heart_rate_bpm, steps, active_minutes
+               FROM energy_scores ORDER BY date DESC LIMIT ?""",
+            (days,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_latest_energy_score(self) -> Optional[dict]:
+        async with self._db.execute(
+            """SELECT date, score, level, sleep_hours, sleep_minutes, heart_rate_bpm, steps, active_minutes
+               FROM energy_scores ORDER BY date DESC LIMIT 1"""
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     # ── Briefings ──────────────────────────────────────────────────────────
 
     async def save_briefing(self, telegram_id: int, content: str):

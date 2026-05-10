@@ -9,6 +9,7 @@ import anthropic
 from ..config import settings
 from .tools import TOOL_SCHEMAS, dispatch_tool
 from ..memory.context_retriever import context_retriever
+from ..memory.database import db
 from ..integrations.gbrain import gbrain
 
 logger = logging.getLogger(__name__)
@@ -75,9 +76,25 @@ not just retrieves. Provide an anchor slug when asking about a specific person o
 The long-term memory context above is pre-fetched automatically before each reply — \
 use it to give informed, personalised answers without needing to call brain_search first.
 
+Fitness & health tools:
+- fitness_summary: Get yesterday's Google Fit data (steps, sleep, heart rate, calories, active minutes) \
+plus an energy score. Use whenever the user asks about their health, steps, sleep, or how they did yesterday.
+- energy_history: Get recent daily energy scores (0–100) with trend data. Use when the user asks about \
+energy trends, how their week went health-wise, or when surfacing tasks by energy level.
+
+Energy-aware task guidance — when the user asks about tasks or daily planning, factor in their energy:
+- 🔴 Low energy (score < 40): Defer complex or creative work; surface routine/admin tasks instead. \
+Flag high-stakes meetings or decisions.
+- 🟡 Medium energy (40–70): Normal productivity. Mix focused and routine tasks.
+- 🟢 High energy (> 70): Front-load deep work, creative tasks, and important decisions.
+Call energy_history to check recent trends before making suggestions.
+
 Format responses for Telegram: use Markdown, keep messages under 4000 characters.
 
 Today's date: {date}
+
+Today's energy context:
+{energy_context}
 
 Relevant context from past conversations:
 {context}
@@ -94,6 +111,30 @@ async def _fetch_brain_context(query: str) -> tuple[list, list]:
         gbrain.recall(query, limit=8),
     )
     return pages, facts
+
+
+async def _fetch_energy_context() -> str:
+    """Return a one-line energy summary string for the system prompt."""
+    try:
+        latest = await db.get_latest_energy_score()
+        if not latest:
+            return "No energy data recorded yet (Google Fit not synced today)."
+        score = latest["score"]
+        level = latest["level"]
+        day = latest["date"]
+        today = date.today().isoformat()
+        when = "Today" if day == today else f"Last recorded ({day})"
+        sleep_h = latest.get("sleep_hours")
+        hr = latest.get("heart_rate_bpm")
+        details = []
+        if sleep_h is not None:
+            details.append(f"sleep {sleep_h}h {latest.get('sleep_minutes', 0)}m")
+        if hr:
+            details.append(f"HR {hr} bpm")
+        detail_str = f" ({', '.join(details)})" if details else ""
+        return f"{when}: {score}/100 — {level} energy{detail_str}."
+    except Exception:
+        return "Energy data unavailable."
 
 
 async def _call_tool_with_retry(name: str, inp: dict, max_attempts: int = 3) -> dict:
@@ -137,10 +178,11 @@ class ClaudeClient:
         if not date_str:
             date_str = date.today().isoformat()
 
-        # Fetch short-term (ChromaDB) and long-term (GBrain) context in parallel
-        relevant_ctx, (brain_pages, brain_facts) = await asyncio.gather(
+        # Fetch short-term context, long-term brain context, and energy score in parallel
+        relevant_ctx, (brain_pages, brain_facts), energy_ctx = await asyncio.gather(
             context_retriever.get_relevant_context(telegram_id, user_message, n=5),
             _fetch_brain_context(user_message),
+            _fetch_energy_context(),
         )
 
         brain_ctx = gbrain.format_context(brain_pages, brain_facts) or "None"
@@ -148,6 +190,7 @@ class ClaudeClient:
             date=date_str,
             context=relevant_ctx or "None",
             brain_context=brain_ctx,
+            energy_context=energy_ctx,
         )
 
         messages = self._build_messages(conversation_history, user_message)
