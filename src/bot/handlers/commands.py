@@ -117,65 +117,66 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Dump raw Google Fit data sources and sessions for debugging."""
+    from datetime import datetime, timezone
     user = update.effective_user
     if not _is_allowed(user.id):
         await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await update.message.reply_text("Running fitdebug...")
 
-    from ...integrations.google_fit import google_fit
-
-    lines: list[str] = []
-
-    # ── Data sources ──────────────────────────────────────────────────────────
-    lines.append("=== DATA SOURCES ===")
     try:
-        sources = google_fit.debug_data_sources()
-        if not sources:
-            lines.append("(none found)")
-        else:
-            for ds in sources:
-                stream_id  = ds.get("dataStreamId", "?")
-                type_name  = ds.get("dataType", {}).get("name", "?")
-                device     = ds.get("device", {}).get("model", "")
-                app        = ds.get("application", {}).get("packageName", "")
-                source_tag = device or app or "unknown"
-                lines.append(f"{type_name}\n  {source_tag}\n  {stream_id}")
+        from ...integrations.google_fit import google_fit
+
+        lines: list[str] = []
+
+        # ── Data sources ──────────────────────────────────────────────────────
+        lines.append("=== DATA SOURCES ===")
+        try:
+            sources = google_fit.debug_data_sources()
+            if not sources:
+                lines.append("(none found)")
+            else:
+                for ds in sources:
+                    stream_id  = ds.get("dataStreamId", "?")
+                    type_name  = ds.get("dataType", {}).get("name", "?")
+                    device     = ds.get("device", {}).get("model", "")
+                    app        = ds.get("application", {}).get("packageName", "")
+                    source_tag = device or app or "unknown"
+                    lines.append(f"{type_name}\n  {source_tag}\n  {stream_id}")
+        except Exception as exc:
+            lines.append(f"Error fetching sources: {exc}")
+
+        lines.append("")
+
+        # ── Sessions (last 7 days) ────────────────────────────────────────────
+        lines.append("=== SESSIONS (last 7 days) ===")
+        try:
+            sessions = google_fit.debug_sessions(days=7)
+            if not sessions:
+                lines.append("(none found)")
+            else:
+                for s in sessions:
+                    s_ms      = int(s.get("startTimeMillis", 0))
+                    e_ms      = int(s.get("endTimeMillis", 0))
+                    dur_m     = (e_ms - s_ms) // 60_000
+                    start_str = datetime.fromtimestamp(s_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+                    atype     = s.get("activityType", "?")
+                    name      = s.get("name", "")
+                    app       = s.get("application", {}).get("packageName", "")
+                    lines.append(
+                        f"{start_str} type={atype} dur={dur_m}m\n"
+                        f"  name={name!r} app={app}"
+                    )
+        except Exception as exc:
+            lines.append(f"Error fetching sessions: {exc}")
+
+        text = "\n".join(lines)
+        for i in range(0, max(len(text), 1), 3800):
+            await update.message.reply_text(text[i:i + 3800])
+
     except Exception as exc:
-        lines.append(f"Error: {exc}")
-
-    lines.append("")
-
-    # ── Sessions (last 7 days) ────────────────────────────────────────────────
-    lines.append("=== SESSIONS (last 7 days) ===")
-    try:
-        sessions = google_fit.debug_sessions(days=7)
-        if not sessions:
-            lines.append("(none found)")
-        else:
-            for s in sessions:
-                s_ms   = int(s.get("startTimeMillis", 0))
-                e_ms   = int(s.get("endTimeMillis", 0))
-                dur_m  = (e_ms - s_ms) // 60_000
-                from datetime import datetime, timezone
-                start_str = datetime.fromtimestamp(s_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
-                atype  = s.get("activityType", "?")
-                name   = s.get("name", "")
-                app    = s.get("application", {}).get("packageName", "")
-                lines.append(
-                    f"{start_str} type={atype} dur={dur_m}m\n"
-                    f"  name={name!r} app={app}"
-                )
-    except Exception as exc:
-        lines.append(f"Error: {exc}")
-
-    # Split into chunks ≤4000 chars (Telegram limit)
-    text = "\n".join(lines)
-    chunk_size = 3800
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    for chunk in chunks:
-        await update.message.reply_text(chunk)
+        await update.message.reply_text(f"fitdebug crashed: {exc}")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
