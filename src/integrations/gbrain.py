@@ -161,3 +161,65 @@ class GBrainClient:
 
 
 gbrain = GBrainClient()
+
+
+# ── Contact ↔ brain-page helpers ─────────────────────────────────────────────
+
+def contact_slug(name: str) -> str:
+    """'Ahmed Ali' → 'people/ahmed-ali'"""
+    import re
+    slug = re.sub(r"[^\w\s-]", "", name.lower())
+    slug = re.sub(r"[\s_]+", "-", slug).strip("-")
+    return f"people/{slug}"
+
+
+def contact_to_page(contact: dict) -> str:
+    """Format a contact dict as a GBrain markdown page with YAML frontmatter."""
+    name    = contact.get("name", "")
+    email   = contact.get("email", "")
+    company = contact.get("company") or ""
+    mobile  = contact.get("phone_mobile") or ""
+    work    = contact.get("phone_work") or ""
+    home    = contact.get("phone_home") or ""
+    street  = contact.get("address_street") or ""
+    city    = contact.get("address_city") or ""
+    country = contact.get("address_country") or ""
+    notes   = contact.get("notes") or ""
+    bday    = contact.get("birthday") or ""
+
+    # YAML frontmatter
+    fm_lines = [
+        "---",
+        f"name: {name}",
+        f"email: {email}",
+    ]
+    if company:
+        fm_lines.append(f"company: {company}")
+    fm_lines.append("tags: [contact, person]")
+    fm_lines.append("---")
+
+    # Body
+    lines = [f"# {name}", ""]
+    rows: list[tuple[str, str]] = []
+    if email:   rows.append(("Email", email))
+    if mobile:  rows.append(("Mobile", mobile))
+    if work:    rows.append(("Work phone", work))
+    if home:    rows.append(("Home phone", home))
+    if company: rows.append(("Company", company))
+    location = ", ".join(p for p in [city, country] if p)
+    if location: rows.append(("Location", location))
+    if street:  rows.append(("Address", street))
+    if bday:    rows.append(("Birthday", bday))
+
+    if rows:
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
+        for field, value in rows:
+            lines.append(f"| {field} | {value} |")
+        lines.append("")
+
+    if notes:
+        lines.append("## Notes")
+        lines.append(notes)
+
+    return "\n".join(fm_lines) + "\n\n" + "\n".join(lines)

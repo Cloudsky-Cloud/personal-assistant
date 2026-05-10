@@ -7,7 +7,7 @@ from ..integrations.gcalendar import gcalendar
 from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
 from ..integrations.websearch import search_web, search_news
-from ..integrations.gbrain import gbrain
+from ..integrations.gbrain import gbrain, contact_slug, contact_to_page
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
@@ -460,6 +460,16 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "brain_sync_contacts",
+        "description": (
+            "Sync all contacts from the local database to GBrain as structured people pages "
+            "at slugs like 'people/ahmed-ali'. Use once to backfill existing contacts, or to "
+            "rebuild brain pages after changes. Each page includes name, email, phone, company, "
+            "location, birthday, and notes."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "brain_think",
         "description": (
             "Ask GBrain to synthesize everything it knows about a question using multi-hop "
@@ -625,6 +635,12 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                     tool_input["name"], tool_input["email"], exc,
                 )
                 google_status = {"google_contacts": "local only (sync failed)"}
+            # Mirror to GBrain people page
+            contact_record = {"name": tool_input["name"], "email": tool_input["email"], **extra}
+            await gbrain.put_page(
+                contact_slug(tool_input["name"]),
+                contact_to_page(contact_record),
+            )
             return {
                 "status": "saved",
                 "name": tool_input["name"],
@@ -711,6 +727,18 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             return search_news(
                 tool_input["query"], tool_input.get("max_results", 5)
             )
+
+        case "brain_sync_contacts":
+            all_contacts = contacts_db.list_all()
+            if not all_contacts:
+                return {"status": "done", "synced": 0, "message": "No contacts found."}
+            results = await asyncio.gather(*[
+                gbrain.put_page(contact_slug(c["name"]), contact_to_page(c))
+                for c in all_contacts
+            ])
+            synced = sum(1 for r in results if r is not None)
+            failed = len(all_contacts) - synced
+            return {"status": "done", "synced": synced, "failed": failed}
 
         case "brain_search":
             query = tool_input["query"]
