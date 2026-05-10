@@ -4,13 +4,16 @@ from .google_auth import build_google_service
 
 logger = logging.getLogger(__name__)
 
-# Google Fit standard sleep stage values (RFC defined)
+# Google Fit standard sleep stage values
 _GOOGLE_STAGE_NAMES = {1: "awake", 2: "sleep", 3: "awake", 4: "light", 5: "deep", 6: "rem"}
 _GOOGLE_ASLEEP = frozenset({2, 4, 5, 6})
 
-# Samsung Health sleep stage values used in com.samsung.health.sleep_stage
+# Samsung Health sleep stage values
 _SAMSUNG_STAGE_NAMES = {40001: "awake", 40002: "light", 40003: "deep", 40004: "rem"}
 _SAMSUNG_ASLEEP = frozenset({40002, 40003, 40004})
+
+# All sleep-related activity types (72=sleep, 109=light, 110=deep, 111=REM, 112=awake-during-sleep)
+_SLEEP_ACTIVITY_TYPES = frozenset({72, 109, 110, 111, 112})
 
 
 class GoogleFit:
@@ -53,18 +56,73 @@ class GoogleFit:
         return {"steps": steps, "goal": self.STEP_GOAL, "goal_pct": round(steps / self.STEP_GOAL * 100)}
 
     def _sleep_window_ms(self) -> tuple[int, int]:
-        """Yesterday noon UTC → today noon UTC: captures any overnight sleep period."""
+        """48 hours ago → now, wide enough to catch the most recent overnight sleep."""
         now = datetime.now(timezone.utc)
-        today_noon = now.replace(hour=12, minute=0, second=0, microsecond=0)
-        yesterday_noon = today_noon - timedelta(hours=24)
-        return int(yesterday_noon.timestamp() * 1000), int(today_noon.timestamp() * 1000)
+        return int((now - timedelta(hours=48)).timestamp() * 1000), int(now.timestamp() * 1000)
+
+    def _fmt_ms(self, ms: int) -> str:
+        """Format epoch-ms as a readable UTC string for log output."""
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # ── Approach 1: Sessions API ───────────────────────────────────────────
+
+    def _sessions_sleep(self, start_ms: int, end_ms: int) -> dict:
+        start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat()
+        end_iso = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).isoformat()
+
+        try:
+            resp = self._svc().users().sessions().list(
+                userId="me",
+                startTime=start_iso,
+                endTime=end_iso,
+            ).execute()
+        except Exception as exc:
+            logger.warning("get_sleep[sessions]: API call failed: %s", exc)
+            return {}
+
+        all_sessions = resp.get("session", [])
+        # Log every session so we can see exactly what the API returns
+        logger.info(
+            "get_sleep[sessions]: %d session(s) in window %s → %s",
+            len(all_sessions), self._fmt_ms(start_ms), self._fmt_ms(end_ms),
+        )
+        for s in all_sessions:
+            s_ms = int(s.get("startTimeMillis", 0))
+            e_ms = int(s.get("endTimeMillis", 0))
+            dur_min = (e_ms - s_ms) // 60_000
+            logger.info(
+                "  session: activityType=%s name=%r start=%s dur=%dm id=%s",
+                s.get("activityType"), s.get("name"),
+                self._fmt_ms(s_ms), dur_min, s.get("id", "")[:24],
+            )
+
+        sleep_sessions = [s for s in all_sessions if s.get("activityType") in _SLEEP_ACTIVITY_TYPES]
+        logger.info(
+            "get_sleep[sessions]: %d sleep session(s) (activityType in %s)",
+            len(sleep_sessions), sorted(_SLEEP_ACTIVITY_TYPES),
+        )
+        if not sleep_sessions:
+            return {}
+
+        # Take the most recent sleep session
+        sleep_sessions.sort(key=lambda s: int(s.get("startTimeMillis", 0)), reverse=True)
+        best = sleep_sessions[0]
+        total_ms = int(best.get("endTimeMillis", 0)) - int(best.get("startTimeMillis", 0))
+        hours = total_ms // 3_600_000
+        minutes = (total_ms % 3_600_000) // 60_000
+        logger.info(
+            "get_sleep[sessions]: using session activityType=%s name=%r → %dh%dm",
+            best.get("activityType"), best.get("name"), hours, minutes,
+        )
+        return {"hours": hours, "minutes": minutes, "total_minutes": total_ms // 60_000, "stages": {}}
+
+    # ── Approach 2: Raw data source points ────────────────────────────────
 
     def _find_sleep_sources(self) -> list[tuple[str, str]]:
-        """List (stream_id, data_type) for all sleep data sources, sorted by priority."""
         try:
             resp = self._svc().users().dataSources().list(userId="me").execute()
         except Exception as exc:
-            logger.warning("get_sleep: dataSources.list failed: %s", exc)
+            logger.warning("get_sleep[sources]: dataSources.list failed: %s", exc)
             return []
         sources = []
         for ds in resp.get("dataSource", []):
@@ -72,20 +130,18 @@ class GoogleFit:
             type_name = ds.get("dataType", {}).get("name", "")
             if "sleep" in stream_id.lower() or "sleep" in type_name.lower():
                 sources.append((stream_id, type_name))
-        # Google standard type first, then Samsung, then everything else
         sources.sort(key=lambda x: (
             0 if x[1] == "com.google.sleep.segment" else
             1 if "samsung" in x[0].lower() or "samsung" in x[1].lower() else
             2
         ))
         logger.info(
-            "get_sleep: %d sleep source(s) available: %s",
+            "get_sleep[sources]: %d sleep source(s): %s",
             len(sources), [s[0] for s in sources] or "none",
         )
         return sources
 
     def _raw_points(self, stream_id: str, start_ms: int, end_ms: int) -> list[dict]:
-        """Fetch raw data points from a data source for the given time range."""
         start_ns = start_ms * 1_000_000
         end_ns = end_ms * 1_000_000
         resp = self._svc().users().dataSources().datasets().get(
@@ -96,7 +152,6 @@ class GoogleFit:
         return resp.get("point", [])
 
     def _sum_sleep_points(self, points: list[dict], is_samsung: bool) -> dict:
-        """Parse raw sleep data points into duration totals by stage."""
         stage_names = _SAMSUNG_STAGE_NAMES if is_samsung else _GOOGLE_STAGE_NAMES
         asleep = _SAMSUNG_ASLEEP if is_samsung else _GOOGLE_ASLEEP
         per_stage: dict[str, int] = {"light": 0, "deep": 0, "rem": 0, "awake": 0}
@@ -122,69 +177,141 @@ class GoogleFit:
             "stages": {k: v // 60_000 for k, v in per_stage.items() if v > 0},
         }
 
-    def _sleep_from_sessions(self, start_ms: int, end_ms: int) -> dict:
-        """Sessions API fallback — returns total duration only, no stage breakdown."""
-        start_iso = datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc).isoformat()
-        end_iso = datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc).isoformat()
-        resp = self._svc().users().sessions().list(
-            userId="me",
-            startTime=start_iso,
-            endTime=end_iso,
-            activityType=72,  # 72 = sleep
-        ).execute()
-        total_ms = sum(
-            int(s.get("endTimeMillis", 0)) - int(s.get("startTimeMillis", 0))
-            for s in resp.get("session", [])
-        )
-        hours = total_ms // 3_600_000
-        minutes = (total_ms % 3_600_000) // 60_000
-        logger.info("get_sleep: sessions fallback → %dh %dm", hours, minutes)
-        return {"hours": hours, "minutes": minutes, "total_minutes": total_ms // 60_000, "stages": {}}
-
-    def get_sleep(self) -> dict:
-        start_ms, end_ms = self._sleep_window_ms()
+    def _datasource_sleep(self, start_ms: int, end_ms: int) -> dict:
         sources = self._find_sleep_sources()
-
         for stream_id, type_name in sources:
             try:
                 points = self._raw_points(stream_id, start_ms, end_ms)
             except Exception as exc:
-                logger.warning("get_sleep: %s query failed: %s", stream_id, exc)
+                logger.warning("get_sleep[sources]: %s failed: %s", stream_id, exc)
                 continue
-
-            logger.info("get_sleep: %s → %d point(s)", stream_id, len(points))
+            logger.info("get_sleep[sources]: %s → %d point(s)", stream_id, len(points))
             if not points:
                 continue
-
             is_samsung = "samsung" in type_name.lower() or "samsung" in stream_id.lower()
             result = self._sum_sleep_points(points, is_samsung)
-
             if result["total_minutes"] > 0:
                 logger.info(
-                    "get_sleep: source=%s total=%dh%dm stages=%s",
-                    stream_id, result["hours"], result["minutes"],
-                    {k: f"{v}m" for k, v in result.get("stages", {}).items()},
+                    "get_sleep[sources]: %s → %dh%dm stages=%s",
+                    stream_id, result["hours"], result["minutes"], result.get("stages"),
                 )
                 return result
-
-            # Points present but zero sleep — stage values weren't recognised;
-            # log a sample so the mapping can be updated.
             sampled = {next((v.get("intVal") for v in pt.get("value", [])), None) for pt in points[:10]}
             logger.warning(
-                "get_sleep: %s — %d point(s) but 0 sleep minutes; "
-                "unrecognised stage values in sample: %s",
+                "get_sleep[sources]: %s — %d point(s) but 0 sleep min; stage values: %s",
                 stream_id, len(points), sampled,
             )
+        return {}
 
-        # Fallback: sleep sessions give total duration without stage breakdown
-        try:
-            result = self._sleep_from_sessions(start_ms, end_ms)
-            if result["total_minutes"] > 0:
-                return result
-        except Exception as exc:
-            logger.warning("get_sleep: sessions fallback failed: %s", exc)
+    # ── Approach 3: Aggregate endpoint ────────────────────────────────────
 
-        logger.warning("get_sleep: no sleep data found in any source")
+    def _aggregate_sleep(self, start_ms: int, end_ms: int) -> dict:
+        # Try bucketByActivityType first (preserves per-stage breakdowns)
+        for body in [
+            {
+                "aggregateBy": [{"dataTypeName": "com.google.sleep.segment"}],
+                "bucketByActivityType": {"minDurationMillis": 60_000},
+                "startTimeMillis": start_ms,
+                "endTimeMillis": end_ms,
+            },
+            {
+                "aggregateBy": [{"dataTypeName": "com.google.sleep.segment"}],
+                "bucketByTime": {"durationMillis": end_ms - start_ms},
+                "startTimeMillis": start_ms,
+                "endTimeMillis": end_ms,
+            },
+        ]:
+            bucket_type = "bucketByActivityType" if "bucketByActivityType" in body else "bucketByTime"
+            try:
+                resp = self._svc().users().dataset().aggregate(userId="me", body=body).execute()
+            except Exception as exc:
+                logger.warning("get_sleep[aggregate/%s]: failed: %s", bucket_type, exc)
+                continue
+
+            buckets = resp.get("bucket", [])
+            point_count = sum(
+                len(ds.get("point", []))
+                for b in buckets
+                for ds in b.get("dataset", [])
+            )
+            logger.info(
+                "get_sleep[aggregate/%s]: %d bucket(s), %d total point(s)",
+                bucket_type, len(buckets), point_count,
+            )
+            # Log raw bucket summary
+            for i, b in enumerate(buckets):
+                pts = [pt for ds in b.get("dataset", []) for pt in ds.get("point", [])]
+                vals = [next((v.get("intVal") for v in pt.get("value", [])), None) for pt in pts[:5]]
+                logger.info(
+                    "  bucket[%d]: activityType=%s points=%d sample_vals=%s",
+                    i, b.get("activityType"), len(pts), vals,
+                )
+
+            per_stage: dict[str, int] = {"light": 0, "deep": 0, "rem": 0, "awake": 0}
+            total_ms = 0
+            for bucket in buckets:
+                for ds in bucket.get("dataset", []):
+                    for pt in ds.get("point", []):
+                        s_ns = int(pt.get("startTimeNanos", 0))
+                        e_ns = int(pt.get("endTimeNanos", 0))
+                        dur_ms = (e_ns - s_ns) // 1_000_000
+                        if dur_ms <= 0:
+                            continue
+                        val = next((v.get("intVal") for v in pt.get("value", [])), None)
+                        stage = _GOOGLE_STAGE_NAMES.get(val)
+                        if stage in per_stage:
+                            per_stage[stage] += dur_ms
+                        if val in _GOOGLE_ASLEEP:
+                            total_ms += dur_ms
+
+            if total_ms > 0:
+                hours = total_ms // 3_600_000
+                minutes = (total_ms % 3_600_000) // 60_000
+                logger.info("get_sleep[aggregate/%s]: → %dh%dm", bucket_type, hours, minutes)
+                return {
+                    "hours": hours,
+                    "minutes": minutes,
+                    "total_minutes": total_ms // 60_000,
+                    "stages": {k: v // 60_000 for k, v in per_stage.items() if v > 0},
+                }
+        return {}
+
+    # ── Public method ──────────────────────────────────────────────────────
+
+    def get_sleep(self) -> dict:
+        start_ms, end_ms = self._sleep_window_ms()
+        logger.info(
+            "get_sleep: window %s → %s",
+            self._fmt_ms(start_ms), self._fmt_ms(end_ms),
+        )
+
+        # 1. Sessions API — what Google Fit app uses; most reliable
+        result = self._sessions_sleep(start_ms, end_ms)
+        if result.get("total_minutes", 0) > 0:
+            # Attempt to enrich with stage breakdown from data sources
+            try:
+                enriched = self._datasource_sleep(start_ms, end_ms)
+                if enriched.get("stages"):
+                    result["stages"] = enriched["stages"]
+            except Exception:
+                pass
+            return result
+
+        # 2. Raw data source points
+        result = self._datasource_sleep(start_ms, end_ms)
+        if result.get("total_minutes", 0) > 0:
+            return result
+
+        # 3. Aggregate endpoint (both bucket strategies)
+        result = self._aggregate_sleep(start_ms, end_ms)
+        if result.get("total_minutes", 0) > 0:
+            return result
+
+        logger.warning(
+            "get_sleep: no sleep data found via sessions, data sources, or aggregate "
+            "for window %s → %s",
+            self._fmt_ms(start_ms), self._fmt_ms(end_ms),
+        )
         return {"hours": 0, "minutes": 0, "total_minutes": 0, "stages": {}}
 
     def get_heart_rate(self) -> dict:
