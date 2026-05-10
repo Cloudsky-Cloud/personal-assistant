@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -6,6 +7,7 @@ from ..integrations.gcalendar import gcalendar
 from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
 from ..integrations.websearch import search_web, search_news
+from ..integrations.gbrain import gbrain
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
@@ -411,6 +413,53 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "brain_search",
+        "description": (
+            "Search your long-term brain (GBrain) for anything you know about a person, "
+            "topic, or project. Use for 'what do you know about X', 'find everything about Y', "
+            "'do you remember anything about Z'. Returns matching pages and known facts. "
+            "Falls back gracefully if GBrain is not configured."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to search for — name, topic, project, or question",
+                },
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "brain_write",
+        "description": (
+            "Store something permanently in your long-term brain (GBrain). "
+            "Use when the user says 'remember that...', 'note that...', 'always remember...', "
+            "or any time important facts, decisions, or preferences should be retained forever. "
+            "Optionally provide a slug (e.g. 'people/ahmed', 'topics/project-x') to create a "
+            "structured brain page; omit slug for a quick fact stored in hot memory."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "What to remember — the full text, note, or markdown page body",
+                },
+                "slug": {
+                    "type": "string",
+                    "description": (
+                        "Optional brain page slug, e.g. 'people/ahmed-ali', 'topics/project-x'. "
+                        "If omitted the fact is stored in hot memory only."
+                    ),
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -444,7 +493,11 @@ TOOL_SCHEMAS = [
 
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
-def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
+async def _run_parallel(*coros):
+    return await asyncio.gather(*coros)
+
+
+async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
     """Execute a named tool and return a JSON-serializable result."""
     match tool_name:
         case "gmail_list_unread":
@@ -626,6 +679,30 @@ def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
             return search_news(
                 tool_input["query"], tool_input.get("max_results", 5)
             )
+
+        case "brain_search":
+            query = tool_input["query"]
+            limit = tool_input.get("limit", 5)
+            pages, facts = await _run_parallel(
+                gbrain.query(query, limit=limit),
+                gbrain.recall(query, limit=10),
+            )
+            if not pages and not facts:
+                return {"result": "GBrain is not configured or returned no results."}
+            return {
+                "pages": pages,
+                "facts": facts,
+                "summary": gbrain.format_context(pages, facts),
+            }
+
+        case "brain_write":
+            content = tool_input["content"]
+            slug = tool_input.get("slug")
+            await gbrain.extract_facts(content)
+            if slug:
+                await gbrain.put_page(slug, content)
+                return {"status": "written", "slug": slug, "hot_memory": "indexed"}
+            return {"status": "written", "hot_memory": "indexed"}
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     briefing_time: str = "08:00"
     timezone: str = "UTC"
 
+    # GBrain (optional — leave blank to disable)
+    gbrain_url: str = ""     # e.g. http://localhost:3131
+    gbrain_token: str = ""   # Bearer token from: gbrain auth create "bot"
+
     # Tuning
     whisper_model: str = "base"
     conversation_window: int = 30

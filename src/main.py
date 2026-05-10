@@ -9,6 +9,7 @@ from .memory.vector_store import vector_store
 from .bot.telegram_bot import build_application
 from .scheduler.briefing import schedule_briefings
 from .scheduler.reminders import schedule_reminders
+from .scheduler.dream import schedule_dream_cycle
 from .startup import run_startup_checks
 
 logging.basicConfig(
@@ -99,6 +100,7 @@ async def main():
     scheduler = AsyncIOScheduler()
     schedule_briefings(scheduler, app.bot)
     schedule_reminders(scheduler, app.bot)
+    schedule_dream_cycle(scheduler)
     scheduler.start()
     logger.info("Scheduler started")
 

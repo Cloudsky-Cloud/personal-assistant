@@ -1,5 +1,6 @@
 import aiosqlite
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -104,6 +105,18 @@ class Database:
             ),
         )
         await self._db.commit()
+
+    async def get_messages_since(self, since: datetime, limit: int = 2000) -> list[dict]:
+        """Return all user+assistant messages across all users since a UTC datetime."""
+        async with self._db.execute(
+            """SELECT telegram_id, role, content, created_at
+               FROM conversations
+               WHERE created_at >= ? AND role IN ('user', 'assistant') AND content IS NOT NULL
+               ORDER BY created_at ASC LIMIT ?""",
+            (since.isoformat(), limit),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     async def get_recent_messages(self, telegram_id: int, limit: int = 30) -> list[dict]:
         async with self._db.execute(

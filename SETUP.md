@@ -87,6 +87,84 @@ docker-compose logs -f
 
 ---
 
+---
+
+## GBrain (optional long-term memory)
+
+GBrain gives the bot a persistent, searchable knowledge base. Without it everything still works — GBrain is purely additive.
+
+### Step A — Install on the VPS
+
+```bash
+# Install Bun (GBrain requires Bun ≥1.3.10, not Node.js)
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+
+# Clone and link
+git clone https://github.com/garrytan/gbrain /opt/gbrain
+cd /opt/gbrain
+bun install
+bun link          # makes 'gbrain' available system-wide
+```
+
+### Step B — Start GBrain as a service
+
+```bash
+# Start the HTTP server (runs on port 3131)
+gbrain serve --http --port 3131 --public-url http://localhost:3131 &
+
+# Or create a systemd unit so it survives reboots:
+cat > /etc/systemd/system/gbrain.service << 'EOF'
+[Unit]
+Description=GBrain memory server
+After=network.target
+
+[Service]
+ExecStart=/root/.bun/bin/gbrain serve --http --port 3131 --public-url http://localhost:3131
+Restart=always
+WorkingDirectory=/opt/gbrain
+Environment=GBRAIN_HOME=/opt/gbrain-data
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now gbrain
+```
+
+### Step C — Create a bot token
+
+```bash
+gbrain auth create "personal-assistant-bot"
+# → prints a bearer token — copy it
+```
+
+### Step D — Update `.env`
+
+```
+GBRAIN_URL=http://localhost:3131
+GBRAIN_TOKEN=<paste token from Step C>
+```
+
+Restart the bot: `docker-compose restart bot`
+
+### What GBrain enables
+
+| Feature | How it works |
+|---|---|
+| Auto-read before every reply | Bot fetches relevant pages + hot-memory facts before calling Claude |
+| Auto-write after every reply | `extract_facts` indexes contacts, decisions, tasks from each exchange |
+| `brain_search` tool | Say "what do you know about Ahmed?" — searches pages + facts |
+| `brain_write` tool | Say "remember that..." — stores permanently in hot memory; add a slug to create a full page |
+| Nightly dream cycle (2 AM) | Consolidates the day's conversations into a structured daily log page |
+
+### Deployment note
+
+When deploying via `vps_deploy` (git pull + docker build), GBrain continues running as a separate systemd service — no downtime.
+
+---
+
 ## Troubleshooting
 
 ### "Google token is missing required scopes"

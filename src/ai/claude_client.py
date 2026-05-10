@@ -9,6 +9,7 @@ import anthropic
 from ..config import settings
 from .tools import TOOL_SCHEMAS, dispatch_tool
 from ..memory.context_retriever import context_retriever
+from ..integrations.gbrain import gbrain
 
 logger = logging.getLogger(__name__)
 
@@ -59,13 +60,36 @@ Web search capabilities:
 "recent updates about X"). Always include source and date.
 Use web search proactively whenever the question requires current or broad factual knowledge.
 
+Long-term brain (GBrain) capabilities:
+- brain_search: search your permanent memory for anything about a person, topic, or project. \
+Use when the user asks "what do you know about X", "find everything about Y", \
+"do you remember anything about Z", or any question that might have prior context.
+- brain_write: store something permanently. Use immediately when the user says \
+"remember that...", "note that...", "always remember...", or whenever a fact, \
+decision, or preference clearly should be retained long-term. \
+Provide a slug (e.g. "people/name", "topics/project") for structured pages.
+The long-term memory context above is pre-fetched automatically before each reply — \
+use it to give informed, personalised answers without needing to call brain_search first.
+
 Format responses for Telegram: use Markdown, keep messages under 4000 characters.
 
 Today's date: {date}
 
 Relevant context from past conversations:
 {context}
+
+Long-term memory (GBrain):
+{brain_context}
 """
+
+
+async def _fetch_brain_context(query: str) -> tuple[list, list]:
+    """Return (pages, facts) from GBrain in parallel. Both empty if GBrain disabled."""
+    pages, facts = await asyncio.gather(
+        gbrain.query(query, limit=5),
+        gbrain.recall(query, limit=8),
+    )
+    return pages, facts
 
 
 async def _call_tool_with_retry(name: str, inp: dict, max_attempts: int = 3) -> dict:
@@ -73,7 +97,7 @@ async def _call_tool_with_retry(name: str, inp: dict, max_attempts: int = 3) -> 
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            return dispatch_tool(name, inp)
+            return await dispatch_tool(name, inp)
         except Exception as exc:
             last_exc = exc
             if attempt < max_attempts - 1:
@@ -109,23 +133,32 @@ class ClaudeClient:
         if not date_str:
             date_str = date.today().isoformat()
 
-        relevant_ctx = await context_retriever.get_relevant_context(
-            telegram_id, user_message, n=5
+        # Fetch short-term (ChromaDB) and long-term (GBrain) context in parallel
+        relevant_ctx, (brain_pages, brain_facts) = await asyncio.gather(
+            context_retriever.get_relevant_context(telegram_id, user_message, n=5),
+            _fetch_brain_context(user_message),
         )
+
+        brain_ctx = gbrain.format_context(brain_pages, brain_facts) or "None"
         system = _SYSTEM_PROMPT.format(
-            date=date_str, context=relevant_ctx or "None"
+            date=date_str,
+            context=relevant_ctx or "None",
+            brain_context=brain_ctx,
         )
 
         messages = self._build_messages(conversation_history, user_message)
         response_text = await self._run_tool_loop(messages, system)
 
-        # Persist exchange to vector memory
+        # Persist exchange to vector memory + GBrain hot memory (fire-and-forget)
         msg_key = f"{telegram_id}_{date_str}_{len(messages)}"
-        await context_retriever.store_message(
-            telegram_id, "user", user_message, f"u_{msg_key}"
-        )
-        await context_retriever.store_message(
-            telegram_id, "assistant", response_text, f"a_{msg_key}"
+        session_id = f"tg-{telegram_id}"
+        await asyncio.gather(
+            context_retriever.store_message(telegram_id, "user", user_message, f"u_{msg_key}"),
+            context_retriever.store_message(telegram_id, "assistant", response_text, f"a_{msg_key}"),
+            gbrain.extract_facts(
+                f"User: {user_message}\n\nAssistant: {response_text}",
+                session_id=session_id,
+            ),
         )
         return response_text
 
