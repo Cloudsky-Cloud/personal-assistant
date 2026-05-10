@@ -29,6 +29,7 @@ _API_ENABLE_LINKS = {
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
     "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
     "Fitness":           "https://console.cloud.google.com/apis/library/fitness.googleapis.com",
+    "Health Connect":    "https://console.cloud.google.com/apis/library/health.googleapis.com",
 }
 
 _API_PROBES = [
@@ -40,12 +41,17 @@ _API_PROBES = [
     ("Fitness",           "fitness",  "v1", lambda svc: svc.users().dataSources().list(userId="me").execute()),
 ]
 
-# Fitness scopes that must be present in the token for Galaxy Watch health data.
+# Scopes required in the token for Galaxy Watch health data.
 _REQUIRED_FITNESS_SCOPES = [
+    # Google Fit (fallback)
     "https://www.googleapis.com/auth/fitness.activity.read",
     "https://www.googleapis.com/auth/fitness.sleep.read",
     "https://www.googleapis.com/auth/fitness.heart_rate.read",
     "https://www.googleapis.com/auth/fitness.body.read",
+    # Google Health Connect (primary)
+    "https://www.googleapis.com/auth/googlehealth.sleep.readonly",
+    "https://www.googleapis.com/auth/googlehealth.activity_and_fitness.readonly",
+    "https://www.googleapis.com/auth/googlehealth.health_metrics_and_measurements.readonly",
 ]
 
 
@@ -100,6 +106,34 @@ def _verify_apis(creds) -> None:
             all_ok = False
         else:
             print(f"  WARN  Cloud TTS: {exc}")
+
+    # Health Connect REST API — direct HTTP probe
+    try:
+        from google.auth.transport.requests import AuthorizedSession
+        from datetime import datetime, timezone, timedelta
+        session = AuthorizedSession(creds)
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        resp = session.get(
+            "https://health.googleapis.com/v4/users/me/dataTypes/steps/dataPoints",
+            params={"startTime": start, "endTime": end},
+            timeout=10,
+        )
+        if resp.status_code == 403:
+            msg = resp.text
+            if any(kw in msg for kw in ("has not been used", "disabled", "ACCESS_DISABLED")):
+                print(f"  DISABLED  Health Connect")
+                print(f"            Enable it at: {_API_ENABLE_LINKS['Health Connect']}")
+                all_ok = False
+            else:
+                print(f"  WARN  Health Connect: HTTP 403 — {msg[:120]}")
+        elif resp.status_code == 200:
+            print("  OK  Health Connect")
+        else:
+            print(f"  WARN  Health Connect: HTTP {resp.status_code}")
+    except Exception as exc:
+        print(f"  WARN  Health Connect: {exc}")
 
     if all_ok:
         print("\nAll APIs are enabled. You're ready to start the bot.")

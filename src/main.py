@@ -29,6 +29,7 @@ _API_ENABLE_LINKS = {
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
     "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
     "Fitness":           "https://console.cloud.google.com/apis/library/fitness.googleapis.com",
+    "Health Connect":    "https://console.cloud.google.com/apis/library/health.googleapis.com",
 }
 
 _API_PROBES = [
