@@ -8,4 +8,9 @@ SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
     # Required for Google Cloud Text-to-Speech
     "https://www.googleapis.com/auth/cloud-platform",
+    # Google Fit — Galaxy Watch health data
+    "https://www.googleapis.com/auth/fitness.activity.read",
+    "https://www.googleapis.com/auth/fitness.sleep.read",
+    "https://www.googleapis.com/auth/fitness.heart_rate.read",
+    "https://www.googleapis.com/auth/fitness.body.read",
 ]

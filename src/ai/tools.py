@@ -8,6 +8,7 @@ from ..integrations.gdrive import gdrive
 from ..integrations.gtasks import gtasks
 from ..integrations.websearch import search_web, search_news
 from ..integrations.gbrain import gbrain, contact_slug, contact_to_page
+from ..integrations.google_fit import google_fit
 from ..tasks.prioritizer import prioritizer
 from ..memory.contacts import contacts_db
 from ..memory.projects import projects_db
@@ -502,6 +503,24 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "fitness_summary",
+        "description": (
+            "Get yesterday's fitness and health data from Google Fit (synced from Galaxy Watch). "
+            "Returns steps, sleep duration, resting heart rate, calories burned, and active minutes. "
+            "Use when the user asks about steps, sleep, heart rate, calories, fitness, or health data."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metric": {
+                    "type": "string",
+                    "enum": ["all", "steps", "sleep", "heart_rate", "calories", "active_minutes"],
+                    "description": "Which metric to fetch (default: all)",
+                }
+            },
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -774,6 +793,22 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                 args["since"] = tool_input["since"]
             result = await gbrain._call("think", args)
             return result if result else {"result": "GBrain returned no answer."}
+
+        case "fitness_summary":
+            metric = tool_input.get("metric", "all")
+            match metric:
+                case "steps":
+                    return google_fit.get_steps()
+                case "sleep":
+                    return google_fit.get_sleep()
+                case "heart_rate":
+                    return google_fit.get_heart_rate()
+                case "calories":
+                    return google_fit.get_calories()
+                case "active_minutes":
+                    return google_fit.get_active_minutes()
+                case _:
+                    return google_fit.get_summary()
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])

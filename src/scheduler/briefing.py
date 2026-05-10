@@ -15,6 +15,7 @@ from ..integrations.gmail import gmail
 from ..integrations.gcalendar import gcalendar
 from ..integrations.gtasks import gtasks
 from ..integrations.weather import get_weather
+from ..integrations.google_fit import google_fit
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,41 @@ def _section_tasks(
     return "\n".join(lines)
 
 
+def _section_fitness(fit: dict) -> str:
+    steps = fit.get("steps", {})
+    sleep = fit.get("sleep", {})
+    hr = fit.get("heart_rate", {})
+    cal = fit.get("calories", {})
+    active = fit.get("active_minutes", {})
+
+    lines = ["💪 *Health & Fitness*"]
+
+    s = steps.get("steps")
+    if s is not None:
+        pct = steps.get("goal_pct", 0)
+        lines.append(f"👟 Steps: {s:,} ({pct}% of goal)")
+
+    h, m = sleep.get("hours"), sleep.get("minutes")
+    if h is not None:
+        lines.append(f"😴 Sleep: {h}h {m}m")
+
+    bpm = hr.get("bpm")
+    if bpm:
+        lines.append(f"❤️ Heart rate: {bpm} bpm")
+
+    c = cal.get("calories")
+    if c:
+        lines.append(f"🔥 Calories: {c:,}")
+
+    am = active.get("minutes")
+    if am is not None:
+        lines.append(f"⚡ Active minutes: {am}")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _section_projects(projects: list[dict]) -> str:
     if not projects:
         return ""
@@ -314,6 +350,7 @@ async def _build_briefing(tz) -> str:
     all_events: list[dict] = []
     all_tasks: list[dict] = []
     active_projects: list[dict] = []
+    fit_data: dict = {}
 
     try:
         raw = gmail.search(_EMAIL_QUERY, max_results=15)
@@ -336,6 +373,12 @@ async def _build_briefing(tz) -> str:
         active_projects = projects_db.list_projects(status="active")
     except Exception as exc:
         logger.warning("Briefing projects failed: %s", exc)
+
+    try:
+        fit_data = google_fit.get_summary()
+        logger.info("Briefing fitness: fetched")
+    except Exception as exc:
+        logger.warning("Briefing fitness failed: %s", exc)
 
     # ── Bucket tasks ──────────────────────────────────────────────────────────
     overdue: list[tuple[date, dict]] = []
@@ -401,6 +444,13 @@ async def _build_briefing(tz) -> str:
                 parts.append(section)
         except Exception as exc:
             logger.warning("Briefing weather failed: %s", exc)
+
+    try:
+        section = _section_fitness(fit_data)
+        if section:
+            parts.append(section)
+    except Exception as exc:
+        logger.warning("Briefing fitness section failed: %s", exc)
 
     parts.append(_section_emails(human_emails))
     parts.append(_section_calendar(all_events, tz))
