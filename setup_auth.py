@@ -28,6 +28,7 @@ _API_ENABLE_LINKS = {
     "Tasks":             "https://console.cloud.google.com/apis/library/tasks.googleapis.com",
     "People (Contacts)": "https://console.cloud.google.com/apis/library/people.googleapis.com",
     "Cloud TTS":         "https://console.cloud.google.com/apis/library/texttospeech.googleapis.com",
+    "Fitness":           "https://console.cloud.google.com/apis/library/fitness.googleapis.com",
 }
 
 _API_PROBES = [
@@ -36,7 +37,34 @@ _API_PROBES = [
     ("Drive",             "drive",    "v3", lambda svc: svc.files().list(pageSize=1, fields="files(id)").execute()),
     ("Tasks",             "tasks",    "v1", lambda svc: svc.tasklists().list(maxResults=1).execute()),
     ("People (Contacts)", "people",   "v1", lambda svc: svc.people().get(resourceName="people/me", personFields="names").execute()),
+    ("Fitness",           "fitness",  "v1", lambda svc: svc.users().dataSources().list(userId="me").execute()),
 ]
+
+# Fitness scopes that must be present in the token for Galaxy Watch health data.
+_REQUIRED_FITNESS_SCOPES = [
+    "https://www.googleapis.com/auth/fitness.activity.read",
+    "https://www.googleapis.com/auth/fitness.sleep.read",
+    "https://www.googleapis.com/auth/fitness.heart_rate.read",
+    "https://www.googleapis.com/auth/fitness.body.read",
+]
+
+
+def _verify_scopes(creds) -> None:
+    """Print which fitness scopes were granted and warn about any that are missing."""
+    print("\nVerifying fitness scopes in token...\n")
+    granted = set(creds.scopes or [])
+    all_ok = True
+    for scope in _REQUIRED_FITNESS_SCOPES:
+        short = scope.split("/")[-1]
+        if scope in granted:
+            print(f"  OK  {short}")
+        else:
+            print(f"  MISSING  {short}")
+            print(f"           Delete data/google_token.json and re-run this script to re-authorize.")
+            all_ok = False
+    if not all_ok:
+        print("\n  Tip: fitness scopes require the Fitness API to be enabled first.")
+        print(f"  Enable it at: {_API_ENABLE_LINKS['Fitness']}")
 
 
 def _verify_apis(creds) -> None:
@@ -109,6 +137,7 @@ def main():
     token_file.write_text(creds.to_json())
     print(f"\nAuthorization successful. Token saved to {token_file}")
 
+    _verify_scopes(creds)
     _verify_apis(creds)
 
 
