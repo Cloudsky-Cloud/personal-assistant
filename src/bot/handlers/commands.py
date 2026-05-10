@@ -115,6 +115,69 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dump raw Google Fit data sources and sessions for debugging."""
+    user = update.effective_user
+    if not _is_allowed(user.id):
+        await update.message.reply_text("Sorry, you're not authorized to use this bot.")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    from ...integrations.google_fit import google_fit
+
+    lines: list[str] = []
+
+    # ── Data sources ──────────────────────────────────────────────────────────
+    lines.append("*DATA SOURCES*")
+    try:
+        sources = google_fit.debug_data_sources()
+        if not sources:
+            lines.append("_(none found)_")
+        else:
+            for ds in sources:
+                stream_id  = ds.get("dataStreamId", "?")
+                type_name  = ds.get("dataType", {}).get("name", "?")
+                device     = ds.get("device", {}).get("model", "")
+                app        = ds.get("application", {}).get("packageName", "")
+                source_tag = device or app or "unknown"
+                lines.append(f"`{type_name}`\n  {source_tag}\n  `{stream_id}`")
+    except Exception as exc:
+        lines.append(f"Error: {exc}")
+
+    lines.append("")
+
+    # ── Sessions (last 7 days) ────────────────────────────────────────────────
+    lines.append("*SESSIONS (last 7 days)*")
+    try:
+        sessions = google_fit.debug_sessions(days=7)
+        if not sessions:
+            lines.append("_(none found)_")
+        else:
+            for s in sessions:
+                s_ms   = int(s.get("startTimeMillis", 0))
+                e_ms   = int(s.get("endTimeMillis", 0))
+                dur_m  = (e_ms - s_ms) // 60_000
+                from datetime import datetime, timezone
+                start_str = datetime.fromtimestamp(s_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+                atype  = s.get("activityType", "?")
+                name   = s.get("name", "")
+                app    = s.get("application", {}).get("packageName", "")
+                lines.append(
+                    f"`{start_str}` type={atype} dur={dur_m}m\n"
+                    f"  name={name!r} app={app}"
+                )
+    except Exception as exc:
+        lines.append(f"Error: {exc}")
+
+    # Split into chunks ≤4000 chars (Telegram limit)
+    text = "\n".join(lines)
+    chunk_size = 3800
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    for chunk in chunks:
+        await update.message.reply_text(chunk, parse_mode="Markdown")
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "*Commands:*\n"
@@ -122,6 +185,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/briefing — Full morning briefing now\n"
         "/voice <message> — Reply with text + audio\n"
         "/tasks — Show your prioritized task list\n"
+        "/fitdebug — Raw Google Fit data sources + sessions\n"
         "/help — This help message\n\n"
         "Or send any text or voice message.",
         parse_mode="Markdown",

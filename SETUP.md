@@ -20,8 +20,7 @@ Go to [Google Cloud Console](https://console.cloud.google.com/) and enable **all
 | Google Tasks API | https://console.cloud.google.com/apis/library/tasks.googleapis.com |
 | People API (Contacts) | https://console.cloud.google.com/apis/library/people.googleapis.com |
 | Cloud Text-to-Speech API | https://console.cloud.google.com/apis/library/texttospeech.googleapis.com |
-| Fitness API (Galaxy Watch — fallback) | https://console.cloud.google.com/apis/library/fitness.googleapis.com |
-| Google Health Connect API (Galaxy Watch — primary) | https://console.cloud.google.com/apis/library/health.googleapis.com |
+| Fitness API (Galaxy Watch) | https://console.cloud.google.com/apis/library/fitness.googleapis.com |
 
 After enabling, wait about **1 minute** before continuing.
 
@@ -169,19 +168,11 @@ When deploying via `vps_deploy` (git pull + docker build), GBrain continues runn
 
 ## Troubleshooting
 
-### Galaxy Watch shows "No data" in the morning briefing
+### Google Fit shows "No data" in the morning briefing
 
-The bot tries Health Connect first, then falls back to Google Fit.
-
-**Health Connect path (primary):**
-1. Enable the Google Health Connect API: https://console.cloud.google.com/apis/library/health.googleapis.com
-2. Make sure your Galaxy Watch syncs to the **Health Connect** app on your phone (Samsung Health → Settings → Connected services → Health Connect).
-3. Re-authorize to pick up the new `googlehealth.*` scopes — delete `data/google_token.json` and re-run Step 4.
-4. During authorization Google will show a warning screen ("unverified app") for the sensitive `googlehealth.*` scopes — click **Continue** to proceed.
-
-**Google Fit fallback path:**
-1. Enable the Fitness API: https://console.cloud.google.com/apis/library/fitness.googleapis.com
-2. Make sure your Galaxy Watch syncs to Google Fit on your phone (open the Google Fit app and confirm data is visible there).
+1. Make sure your Galaxy Watch is syncing to Google Fit on your phone (open the Google Fit app and confirm data is visible there).
+2. Enable the Fitness API: https://console.cloud.google.com/apis/library/fitness.googleapis.com
+3. Re-authorize to pick up the new fitness scopes — delete `data/google_token.json` and re-run Step 4.
 
 ### "Google token is missing required scopes"
 Delete `data/google_token.json` and re-run Step 4.
