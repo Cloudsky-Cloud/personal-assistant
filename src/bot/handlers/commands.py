@@ -50,11 +50,15 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Process a message and respond with both text and an MP3 audio file."""
     user = update.effective_user
+    logger.info("/voice received from user %s", user.id)
+
     if not _is_allowed(user.id):
+        logger.warning("/voice user %s is not allowed", user.id)
         await update.message.reply_text("Sorry, you're not authorized to use this bot.")
         return
 
     query = " ".join(context.args or []).strip()
+    logger.info("/voice query: %r", query)
     if not query:
         await update.message.reply_text(
             "Usage: `/voice <your message>`\n"
@@ -66,28 +70,34 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.upsert_user(user.id, user.username or "", user.first_name or "")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
+    logger.info("/voice calling Claude...")
     history = await db.get_recent_messages(user.id, limit=settings.conversation_window)
     response = await claude_client.chat(
         telegram_id=user.id,
         user_message=query,
         conversation_history=history,
     )
+    logger.info("/voice Claude response: %d chars", len(response))
     await db.save_message(user.id, "user", query)
     await db.save_message(user.id, "assistant", response)
 
     # Always send the text response first
     await update.message.reply_text(truncate(response), parse_mode="Markdown")
+    logger.info("/voice text reply sent")
 
     # Then synthesise and send audio
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_voice")
+    logger.info("/voice calling Google TTS...")
     try:
         from ...integrations.gtts import text_to_speech
         audio_bytes = text_to_speech(response)
+        logger.info("/voice TTS returned %d bytes", len(audio_bytes))
         buf = io.BytesIO(audio_bytes)
         buf.name = "response.mp3"
         await update.message.reply_audio(audio=buf, title="Voice Response")
-    except Exception as exc:
-        logger.error("Voice synthesis failed: %s", exc)
+        logger.info("/voice audio sent successfully")
+    except Exception:
+        logger.exception("/voice TTS failed")
         await update.message.reply_text(
             "_(Could not generate audio — see text response above)_",
             parse_mode="Markdown",

@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 import tempfile
@@ -61,3 +62,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.save_message(user.id, "user", transcript)
     await db.save_message(user.id, "assistant", response)
     await update.message.reply_text(truncate(response), parse_mode="Markdown")
+
+    # Respond with audio so voice-in gets voice-out
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="upload_voice")
+    try:
+        from ...integrations.gtts import text_to_speech
+        audio_bytes = text_to_speech(response)
+        logger.info("handle_voice TTS returned %d bytes", len(audio_bytes))
+        buf = io.BytesIO(audio_bytes)
+        buf.name = "response.mp3"
+        await update.message.reply_audio(audio=buf, title="Voice Response")
+    except Exception:
+        logger.exception("handle_voice TTS failed")
