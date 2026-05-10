@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import anthropic
 import pytz
@@ -36,6 +36,7 @@ _NOREPLY_LOCAL_PARTS = frozenset({
     "no-reply", "noreply", "donotreply", "do-not-reply", "do_not_reply",
     "notification", "notifications",
     "alert", "alerts",
+    "security",
     "mailer", "mailer-daemon", "mailerdaemon",
     "postmaster", "bounce", "bounces",
     "newsletter", "newsletters",
@@ -79,6 +80,13 @@ _AUTOMATED_DOMAIN_ROOTS = (
     "atlassian.net", "amazonses.com",
 )
 
+# Subject/snippet keywords that signal an email needs immediate attention.
+_URGENT_SUBJECT_WORDS = frozenset({
+    "urgent", "asap", "immediately", "action required",
+    "deadline", "critical", "time sensitive", "time-sensitive",
+    "overdue", "past due",
+})
+
 
 def _is_automated_sender(from_str: str) -> bool:
     """Return True if the sender is an automated/no-reply address, not a real person."""
@@ -87,16 +95,12 @@ def _is_automated_sender(from_str: str) -> bool:
     local, _, domain = addr.partition("@")
     if not domain:
         return False
-    # Exact local part
     if local in _NOREPLY_LOCAL_PARTS:
         return True
-    # Local part contains unmistakable no-reply signals
     if "noreply" in local or "no-reply" in local or "donotreply" in local:
         return True
-    # Exact domain
     if domain in _AUTOMATED_DOMAINS:
         return True
-    # Subdomain of a known automated root
     for root in _AUTOMATED_DOMAIN_ROOTS:
         if domain.endswith("." + root):
             return True
@@ -106,6 +110,14 @@ def _is_automated_sender(from_str: str) -> bool:
 def _filter_emails(emails: list[dict]) -> list[dict]:
     """Return only emails that appear to be from real people."""
     return [e for e in emails if not _is_automated_sender(e.get("from") or "")]
+
+
+def _is_urgent_email(email: dict) -> bool:
+    """Return True if the email subject or snippet contains urgency signals."""
+    text = (
+        (email.get("subject") or "") + " " + (email.get("snippet") or "")
+    ).lower()
+    return any(w in text for w in _URGENT_SUBJECT_WORDS)
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -158,11 +170,33 @@ def _section_emails(emails: list[dict]) -> str:
         subject = (e.get("subject") or "No subject")[:60].strip()
         sender = _clean_sender(e.get("from") or "Unknown")[:40]
         snippet = (e.get("snippet") or "").strip()[:100]
-        lines.append(f"• *{subject}*")
+        flag = " 🚨" if _is_urgent_email(e) else ""
+        lines.append(f"• *{subject}*{flag}")
         lines.append(f"  From: {sender}")
         if snippet:
             lines.append(f"  _{snippet}_")
     return "\n".join(lines)
+
+
+def _count_today_events(events: list[dict], tz, today: date) -> int:
+    count = 0
+    for e in events:
+        start_str = e.get("start", "")
+        if not start_str:
+            continue
+        try:
+            dt = parse_dt(start_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt.astimezone(tz).date() == today:
+                count += 1
+        except Exception:
+            try:
+                if date.fromisoformat(start_str) == today:
+                    count += 1
+            except Exception:
+                pass
+    return count
 
 
 def _section_calendar(events: list[dict], tz) -> str:
@@ -205,23 +239,12 @@ def _section_calendar(events: list[dict], tz) -> str:
     return "\n".join(lines)
 
 
-def _section_tasks(tasks: list[dict], today: date) -> str:
-    overdue: list[tuple[date, dict]] = []
-    due_today: list[dict] = []
-
-    for t in tasks:
-        if t.get("status") == "completed" or not t.get("due"):
-            continue
-        try:
-            task_date = parse_dt(t["due"]).date()
-            if task_date < today:
-                overdue.append((task_date, t))
-            elif task_date == today:
-                due_today.append(t)
-        except Exception:
-            pass
-
-    if not overdue and not due_today:
+def _section_tasks(
+    overdue: list[tuple[date, dict]],
+    due_today: list[dict],
+    due_this_week: list[tuple[date, dict]],
+) -> str:
+    if not overdue and not due_today and not due_this_week:
         return "✅ *Tasks*\nAll caught up! 🎉"
 
     lines = ["✅ *Tasks*"]
@@ -234,6 +257,11 @@ def _section_tasks(tasks: list[dict], today: date) -> str:
         lines.append("_Due today:_")
         for t in due_today:
             lines.append(f"  • {t['title']}")
+    if due_this_week:
+        lines.append("_Due this week:_")
+        for task_date, t in sorted(due_this_week, key=lambda x: x[0]):
+            due_str = task_date.strftime("%a %-d")
+            lines.append(f"  • {t['title']} _(due {due_str})_")
     return "\n".join(lines)
 
 
@@ -249,18 +277,26 @@ def _section_projects(projects: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _get_motivation() -> str:
+def _classify_workload(overdue_count: int, email_count: int, event_count: int) -> str:
+    score = overdue_count * 2 + email_count + event_count
+    if score >= 8:
+        return "heavy"
+    if score >= 4:
+        return "moderate"
+    return "light"
+
+
+def _get_motivation(day_name: str, workload: str) -> str:
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    prompt = (
+        f"Today is {day_name} and the user's workload is {workload}. "
+        "Write one short, original motivational sentence tailored to this context. "
+        "Plain text only — no quotation marks, no attribution, no emoji."
+    )
     resp = client.messages.create(
         model=settings.claude_model,
         max_tokens=80,
-        messages=[{
-            "role": "user",
-            "content": (
-                "Write one short, original motivational sentence for starting the workday. "
-                "Plain text only — no quotation marks, no attribution."
-            ),
-        }],
+        messages=[{"role": "user", "content": prompt}],
     )
     return resp.content[0].text.strip()
 
@@ -270,11 +306,94 @@ def _get_motivation() -> str:
 async def _build_briefing(tz) -> str:
     now = datetime.now(tz)
     today = now.date()
+    week_end = today + timedelta(days=6)
     day_str = now.strftime(f"%A, %B {now.day}, %Y")
 
-    parts: list[str] = [f"🌅 *Good morning!*\n📅 {day_str}"]
+    # ── Gather raw data ───────────────────────────────────────────────────────
+    human_emails: list[dict] = []
+    all_events: list[dict] = []
+    all_tasks: list[dict] = []
+    active_projects: list[dict] = []
 
-    # Weather
+    try:
+        raw = gmail.search(_EMAIL_QUERY, max_results=15)
+        human_emails = _filter_emails(raw)[:5]
+        logger.info("Briefing emails: %d fetched, %d after filtering", len(raw), len(human_emails))
+    except Exception as exc:
+        logger.warning("Briefing emails failed: %s", exc)
+
+    try:
+        all_events = gcalendar.list_events(days=1)
+    except Exception as exc:
+        logger.warning("Briefing calendar failed: %s", exc)
+
+    try:
+        all_tasks = gtasks.list_tasks(max_results=50)
+    except Exception as exc:
+        logger.warning("Briefing tasks failed: %s", exc)
+
+    try:
+        active_projects = projects_db.list_projects(status="active")
+    except Exception as exc:
+        logger.warning("Briefing projects failed: %s", exc)
+
+    # ── Bucket tasks ──────────────────────────────────────────────────────────
+    overdue: list[tuple[date, dict]] = []
+    due_today: list[dict] = []
+    due_this_week: list[tuple[date, dict]] = []
+
+    for t in all_tasks:
+        if t.get("status") == "completed" or not t.get("due"):
+            continue
+        try:
+            task_date = parse_dt(t["due"]).date()
+            if task_date < today:
+                overdue.append((task_date, t))
+            elif task_date == today:
+                due_today.append(t)
+            elif task_date <= week_end:
+                due_this_week.append((task_date, t))
+        except Exception:
+            pass
+
+    # ── Compute summary stats ─────────────────────────────────────────────────
+    email_count = len(human_emails)
+    event_count = _count_today_events(all_events, tz, today)
+    overdue_count = len(overdue)
+    urgent_emails = [e for e in human_emails if _is_urgent_email(e)]
+
+    # ── Greeting + one-line summary ───────────────────────────────────────────
+    parts: list[str] = []
+
+    stat_parts: list[str] = []
+    if email_count:
+        stat_parts.append(f"{email_count} email{'s' if email_count != 1 else ''}")
+    if event_count:
+        stat_parts.append(f"{event_count} meeting{'s' if event_count != 1 else ''}")
+    if overdue_count:
+        stat_parts.append(f"⚠️ {overdue_count} overdue task{'s' if overdue_count != 1 else ''}")
+    elif due_today:
+        n = len(due_today)
+        stat_parts.append(f"{n} task{'s' if n != 1 else ''} due today")
+
+    greeting = f"🌅 *Good morning!*\n📅 {day_str}"
+    if stat_parts:
+        greeting += f"\n📊 You have {', '.join(stat_parts)} today."
+    parts.append(greeting)
+
+    # ── Urgency alert (prominent, right after greeting) ───────────────────────
+    alert_lines: list[str] = []
+    if overdue_count:
+        n = overdue_count
+        alert_lines.append(f"⚠️ *{n} overdue task{'s' if n != 1 else ''}* — needs attention!")
+    for e in urgent_emails[:2]:
+        subject = (e.get("subject") or "")[:50]
+        sender = _clean_sender(e.get("from") or "")[:30]
+        alert_lines.append(f"🚨 *Urgent email* from {sender}: _{subject}_")
+    if alert_lines:
+        parts.append("\n".join(alert_lines))
+
+    # ── Sections ──────────────────────────────────────────────────────────────
     if settings.weather_city:
         try:
             section = _section_weather(settings.weather_city, settings.weather_country)
@@ -283,44 +402,18 @@ async def _build_briefing(tz) -> str:
         except Exception as exc:
             logger.warning("Briefing weather failed: %s", exc)
 
-    # Emails — top 5 from real people
-    # Fetch 15 after server-side category filtering, then strip automated senders.
-    try:
-        raw = gmail.search(_EMAIL_QUERY, max_results=15)
-        human = _filter_emails(raw)[:5]
-        logger.info(
-            "Briefing emails: %d fetched, %d after filtering", len(raw), len(human)
-        )
-        parts.append(_section_emails(human))
-    except Exception as exc:
-        logger.warning("Briefing emails failed: %s", exc)
+    parts.append(_section_emails(human_emails))
+    parts.append(_section_calendar(all_events, tz))
+    parts.append(_section_tasks(overdue, due_today, due_this_week))
 
-    # Calendar — today's events
-    try:
-        events = gcalendar.list_events(days=1)
-        parts.append(_section_calendar(events, tz))
-    except Exception as exc:
-        logger.warning("Briefing calendar failed: %s", exc)
+    section = _section_projects(active_projects)
+    if section:
+        parts.append(section)
 
-    # Tasks — overdue + due today
+    # ── Motivational closing (day + workload aware) ───────────────────────────
+    workload = _classify_workload(overdue_count, email_count, event_count)
     try:
-        tasks = gtasks.list_tasks(max_results=50)
-        parts.append(_section_tasks(tasks, today))
-    except Exception as exc:
-        logger.warning("Briefing tasks failed: %s", exc)
-
-    # Projects — top 3 active
-    try:
-        active = projects_db.list_projects(status="active")
-        section = _section_projects(active)
-        if section:
-            parts.append(section)
-    except Exception as exc:
-        logger.warning("Briefing projects failed: %s", exc)
-
-    # Motivational closing
-    try:
-        motivation = _get_motivation()
+        motivation = _get_motivation(now.strftime("%A"), workload)
         parts.append(f"💬 _{motivation}_")
     except Exception as exc:
         logger.warning("Briefing motivation failed: %s", exc)
