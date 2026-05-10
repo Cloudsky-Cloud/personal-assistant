@@ -129,11 +129,11 @@ async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines: list[str] = []
 
     # ── Data sources ──────────────────────────────────────────────────────────
-    lines.append("*DATA SOURCES*")
+    lines.append("=== DATA SOURCES ===")
     try:
         sources = google_fit.debug_data_sources()
         if not sources:
-            lines.append("_(none found)_")
+            lines.append("(none found)")
         else:
             for ds in sources:
                 stream_id  = ds.get("dataStreamId", "?")
@@ -141,18 +141,18 @@ async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 device     = ds.get("device", {}).get("model", "")
                 app        = ds.get("application", {}).get("packageName", "")
                 source_tag = device or app or "unknown"
-                lines.append(f"`{type_name}`\n  {source_tag}\n  `{stream_id}`")
+                lines.append(f"{type_name}\n  {source_tag}\n  {stream_id}")
     except Exception as exc:
         lines.append(f"Error: {exc}")
 
     lines.append("")
 
     # ── Sessions (last 7 days) ────────────────────────────────────────────────
-    lines.append("*SESSIONS (last 7 days)*")
+    lines.append("=== SESSIONS (last 7 days) ===")
     try:
         sessions = google_fit.debug_sessions(days=7)
         if not sessions:
-            lines.append("_(none found)_")
+            lines.append("(none found)")
         else:
             for s in sessions:
                 s_ms   = int(s.get("startTimeMillis", 0))
@@ -164,7 +164,7 @@ async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 name   = s.get("name", "")
                 app    = s.get("application", {}).get("packageName", "")
                 lines.append(
-                    f"`{start_str}` type={atype} dur={dur_m}m\n"
+                    f"{start_str} type={atype} dur={dur_m}m\n"
                     f"  name={name!r} app={app}"
                 )
     except Exception as exc:
@@ -175,7 +175,7 @@ async def fitdebug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chunk_size = 3800
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
     for chunk in chunks:
-        await update.message.reply_text(chunk, parse_mode="Markdown")
+        await update.message.reply_text(chunk)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
