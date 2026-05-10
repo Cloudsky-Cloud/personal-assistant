@@ -68,6 +68,10 @@ Use when the user asks "what do you know about X", "find everything about Y", \
 "remember that...", "note that...", "always remember...", or whenever a fact, \
 decision, or preference clearly should be retained long-term. \
 Provide a slug (e.g. "people/name", "topics/project") for structured pages.
+- brain_think: deep multi-hop synthesis across all brain knowledge. Use for \
+"what's the full picture on X?", "summarise everything about Y", \
+"what do I know about this person?". Richer than brain_search — it reasons, \
+not just retrieves. Provide an anchor slug when asking about a specific person or topic.
 The long-term memory context above is pre-fetched automatically before each reply — \
 use it to give informed, personalised answers without needing to call brain_search first.
 

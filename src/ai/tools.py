@@ -460,6 +460,38 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "brain_think",
+        "description": (
+            "Ask GBrain to synthesize everything it knows about a question using multi-hop "
+            "reasoning across all pages and facts. Use for deep questions like 'what's the full "
+            "picture on X?', 'summarise everything about Y', 'what do I know about this person?', "
+            "or 'what are the open questions around Z?'. Returns a cited, reasoned answer — "
+            "much richer than brain_search. Provide an anchor slug when the question is about "
+            "a specific person or topic page."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to reason about",
+                },
+                "anchor": {
+                    "type": "string",
+                    "description": (
+                        "Optional brain page slug to anchor the reasoning, "
+                        "e.g. 'people/ahmed-ali' or 'topics/project-x'"
+                    ),
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Optional ISO date (YYYY-MM-DD) — only consider facts after this date",
+                },
+            },
+            "required": ["question"],
+        },
+    },
+    {
         "name": "prioritize_tasks",
         "description": (
             "Score and rank a list of tasks by urgency and importance using the Eisenhower matrix. "
@@ -703,6 +735,17 @@ async def dispatch_tool(tool_name: str, tool_input: dict) -> Any:
                 await gbrain.put_page(slug, content)
                 return {"status": "written", "slug": slug, "hot_memory": "indexed"}
             return {"status": "written", "hot_memory": "indexed"}
+
+        case "brain_think":
+            if not gbrain.enabled():
+                return {"result": "GBrain is not configured."}
+            args: dict = {"question": tool_input["question"], "rounds": 1}
+            if tool_input.get("anchor"):
+                args["anchor"] = tool_input["anchor"]
+            if tool_input.get("since"):
+                args["since"] = tool_input["since"]
+            result = await gbrain._call("think", args)
+            return result if result else {"result": "GBrain returned no answer."}
 
         case "prioritize_tasks":
             scored = prioritizer.score_list(tool_input["tasks"])
