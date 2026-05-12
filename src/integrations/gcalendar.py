@@ -12,12 +12,18 @@ class GoogleCalendar:
             self._service = build_google_service("calendar", "v3")
         return self._service
 
-    def list_events(self, days: int = 7, calendar_id: str = "primary") -> list[dict]:
-        now = datetime.now(timezone.utc)
-        time_max = now + timedelta(days=days)
+    def list_events(
+        self,
+        days: int = 7,
+        calendar_id: str = "primary",
+        time_min: Optional[datetime] = None,
+    ) -> list[dict]:
+        if time_min is None:
+            time_min = datetime.now(timezone.utc)
+        time_max = time_min + timedelta(days=days)
         res = self._svc().events().list(
             calendarId=calendar_id,
-            timeMin=now.isoformat(),
+            timeMin=time_min.isoformat(),
             timeMax=time_max.isoformat(),
             singleEvents=True,
             orderBy="startTime",
@@ -38,6 +44,10 @@ class GoogleCalendar:
                 "description": e.get("description", ""),
                 "location": e.get("location", ""),
                 "attendees": [a.get("email") for a in e.get("attendees", [])],
+                # True when the API returned a date (not dateTime) — i.e. an all-day event
+                "is_all_day": "dateTime" not in e.get("start", {}),
+                # "default", "focusTime", "outOfOffice", "workingLocation", "fromGmail"
+                "event_type": e.get("eventType", "default"),
             }
             for e in res.get("items", [])
         ]

@@ -1,3 +1,4 @@
+import html as _html
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -109,8 +110,20 @@ def _is_automated_sender(from_str: str) -> bool:
 
 
 def _filter_emails(emails: list[dict]) -> list[dict]:
-    """Return only emails that appear to be from real people."""
-    return [e for e in emails if not _is_automated_sender(e.get("from") or "")]
+    """Return only emails that appear to be from real people, excluding the briefing sender."""
+    exclude = settings.briefing_sender_email.strip().lower()
+    result = []
+    for e in emails:
+        from_str = e.get("from") or ""
+        if _is_automated_sender(from_str):
+            continue
+        if exclude:
+            m = re.search(r"<([^>]+)>", from_str)
+            addr = m.group(1).lower() if m else from_str.lower().strip()
+            if addr == exclude:
+                continue
+        result.append(e)
+    return result
 
 
 def _is_urgent_email(email: dict) -> bool:
@@ -170,7 +183,7 @@ def _section_emails(emails: list[dict]) -> str:
     for e in emails:
         subject = (e.get("subject") or "No subject")[:60].strip()
         sender = _clean_sender(e.get("from") or "Unknown")[:40]
-        snippet = (e.get("snippet") or "").strip()[:100]
+        snippet = _html.unescape((e.get("snippet") or "").strip())[:100]
         flag = " 🚨" if _is_urgent_email(e) else ""
         lines.append(f"• *{subject}*{flag}")
         lines.append(f"  From: {sender}")
@@ -179,24 +192,37 @@ def _section_emails(emails: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Event types that represent blocking/appointment entries vs. status markers
+_APPOINTMENT_TYPES = frozenset({"default", "fromGmail", ""})
+
+
 def _count_today_events(events: list[dict], tz, today: date) -> int:
+    seen: set[tuple] = set()
     count = 0
     for e in events:
+        if e.get("event_type", "default") not in _APPOINTMENT_TYPES:
+            continue
         start_str = e.get("start", "")
         if not start_str:
             continue
         try:
-            dt = parse_dt(start_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            if dt.astimezone(tz).date() == today:
-                count += 1
-        except Exception:
-            try:
+            if e.get("is_all_day"):
                 if date.fromisoformat(start_str) == today:
-                    count += 1
-            except Exception:
-                pass
+                    key = (e.get("summary", "").lower(), start_str)
+                    if key not in seen:
+                        seen.add(key)
+                        count += 1
+            else:
+                dt = parse_dt(start_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt.astimezone(tz).date() == today:
+                    key = (e.get("summary", "").lower(), start_str)
+                    if key not in seen:
+                        seen.add(key)
+                        count += 1
+        except Exception:
+            pass
     return count
 
 
@@ -205,34 +231,52 @@ def _section_calendar(events: list[dict], tz) -> str:
     today_events: list[tuple[datetime, dict]] = []
 
     for e in events:
+        # Fix 5: skip non-appointment event types (focus time, OOO, working location, etc.)
+        if e.get("event_type", "default") not in _APPOINTMENT_TYPES:
+            continue
+
         start_str = e.get("start", "")
         if not start_str:
             continue
-        try:
-            dt = parse_dt(start_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            dt_local = dt.astimezone(tz)
-            if dt_local.date() == today:
-                today_events.append((dt_local, e))
-        except Exception:
-            # All-day event stored as plain date string
+
+        if e.get("is_all_day"):
+            # Fix 2: use the is_all_day flag set by gcalendar, not a midnight heuristic
             try:
                 if date.fromisoformat(start_str) == today:
-                    midnight = datetime(today.year, today.month, today.day, tzinfo=tz)
+                    midnight = tz.localize(datetime(today.year, today.month, today.day))
                     today_events.append((midnight, e))
+            except Exception:
+                pass
+        else:
+            try:
+                dt = parse_dt(start_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt_local = dt.astimezone(tz)
+                if dt_local.date() == today:
+                    today_events.append((dt_local, e))
             except Exception:
                 pass
 
     today_events.sort(key=lambda x: x[0])
+
+    # Fix 1: deduplicate — same title + same start = same appointment listed multiple times
+    seen: set[tuple] = set()
+    unique_events: list[tuple[datetime, dict]] = []
+    for dt_local, e in today_events:
+        key = (e.get("summary", "").lower(), e.get("start", ""))
+        if key not in seen:
+            seen.add(key)
+            unique_events.append((dt_local, e))
+
     lines = ["📅 *Today's Schedule*"]
-    if not today_events:
+    if not unique_events:
         lines.append("No events today.")
     else:
-        for dt_local, e in today_events:
+        for dt_local, e in unique_events:
             title = e.get("summary", "Untitled")
-            # All-day events land at midnight; show as "All day"
-            if dt_local.hour == 0 and dt_local.minute == 0:
+            # Fix 2: use is_all_day flag instead of checking for midnight
+            if e.get("is_all_day"):
                 time_str = "All day"
             else:
                 time_str = dt_local.strftime("%I:%M %p").lstrip("0")
@@ -437,7 +481,9 @@ async def _build_briefing(tz) -> str:
         logger.warning("Briefing emails failed: %s", exc)
 
     try:
-        all_events = gcalendar.list_events(days=1)
+        # Fix 2: fetch from local midnight so events earlier today aren't missed
+        local_midnight = tz.localize(datetime(today.year, today.month, today.day))
+        all_events = gcalendar.list_events(days=1, time_min=local_midnight.astimezone(timezone.utc))
     except Exception as exc:
         logger.warning("Briefing calendar failed: %s", exc)
 
@@ -517,10 +563,8 @@ async def _build_briefing(tz) -> str:
     parts.append(greeting)
 
     # ── Urgency alert (prominent, right after greeting) ───────────────────────
+    # Fix 6: overdue count already appears in the header summary; don't repeat it here
     alert_lines: list[str] = []
-    if overdue_count:
-        n = overdue_count
-        alert_lines.append(f"⚠️ *{n} overdue task{'s' if n != 1 else ''}* — needs attention!")
     for e in urgent_emails[:2]:
         subject = (e.get("subject") or "")[:50]
         sender = _clean_sender(e.get("from") or "")[:30]

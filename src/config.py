@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Scheduler
     briefing_time: str = "08:00"
     timezone: str = "UTC"
+    # Optional: email address whose messages are filtered out of the briefing inbox
+    # (e.g. the address the bot uses to send briefing emails to you)
+    briefing_sender_email: str = ""
 
     # GBrain (optional — leave blank to disable)
     gbrain_url: str = ""     # e.g. http://localhost:3131
