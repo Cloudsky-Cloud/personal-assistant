@@ -15,6 +15,9 @@ _SAMSUNG_ASLEEP = frozenset({40002, 40003, 40004})
 # Activity types that represent sleep sessions in Google Fit
 _SLEEP_ACTIVITY_TYPES = frozenset({72, 109, 110, 111, 112})
 
+# Sessions ended more than this many hours ago are flagged stale (sync likely broken)
+_SLEEP_STALE_HOURS = 20
+
 
 class GoogleFit:
     STEP_GOAL = 10_000
@@ -104,13 +107,19 @@ class GoogleFit:
 
         sleep_sessions.sort(key=lambda s: int(s.get("startTimeMillis", 0)), reverse=True)
         best = sleep_sessions[0]
-        total_ms = int(best.get("endTimeMillis", 0)) - int(best.get("startTimeMillis", 0))
+        end_time_ms = int(best.get("endTimeMillis", 0))
+        total_ms = end_time_ms - int(best.get("startTimeMillis", 0))
         hours, minutes = total_ms // 3_600_000, (total_ms % 3_600_000) // 60_000
         logger.info(
             "get_sleep[sessions]: using activityType=%s → %dh%dm",
             best.get("activityType"), hours, minutes,
         )
-        return {"hours": hours, "minutes": minutes, "total_minutes": total_ms // 60_000, "stages": {}}
+        in_bed_minutes = total_ms // 60_000
+        return {
+            "hours": hours, "minutes": minutes, "total_minutes": in_bed_minutes,
+            "in_bed_minutes": in_bed_minutes,
+            "stages": {}, "_session_end_ms": end_time_ms,
+        }
 
     def _find_sleep_sources(self) -> list[tuple[str, str]]:
         try:
@@ -228,10 +237,23 @@ class GoogleFit:
 
         result = self._sessions_sleep(start_ms, end_ms)
         if result.get("total_minutes", 0) > 0:
+            session_end_ms = result.pop("_session_end_ms", None)
+            if session_end_ms:
+                age_h = (datetime.now(timezone.utc).timestamp() * 1000 - session_end_ms) / 3_600_000
+                if age_h > _SLEEP_STALE_HOURS:
+                    result["stale"] = True
+                    logger.warning("get_sleep: session ended %.1fh ago — flagging stale", age_h)
+            # in_bed_minutes = full session span; total_minutes will be updated to actual sleep
+            result.setdefault("in_bed_minutes", result["total_minutes"])
             try:
                 enriched = self._datasource_sleep(start_ms, end_ms)
                 if enriched.get("stages"):
                     result["stages"] = enriched["stages"]
+                    if enriched.get("total_minutes", 0) > 0:
+                        # Update total_minutes to reflect actual sleep (not in-bed time)
+                        result["total_minutes"] = enriched["total_minutes"]
+                        result["hours"] = enriched["hours"]
+                        result["minutes"] = enriched["minutes"]
             except Exception:
                 pass
             return result
@@ -245,7 +267,7 @@ class GoogleFit:
             return result
 
         logger.warning("get_sleep: no data from sessions, data sources, or aggregate")
-        return {"hours": 0, "minutes": 0, "total_minutes": 0, "stages": {}}
+        return {"unavailable": True}
 
     # ── Other metrics ──────────────────────────────────────────────────────────
 
@@ -273,7 +295,7 @@ class GoogleFit:
             if val.get("fpVal")
         ]
         if not rates:
-            return {"bpm": None}
+            return {"bpm": None, "unavailable": True}
         return {"bpm": round(min(rates))}
 
     def get_calories(self) -> dict:
@@ -365,6 +387,60 @@ class GoogleFit:
         score = min(100, score)
         level = "high" if score >= 71 else ("medium" if score >= 40 else "low")
         return {"score": score, "level": level}
+
+    @staticmethod
+    def compute_sleep_score(sleep: dict) -> dict:
+        """Return {"score": 0-100, "label": "Poor"|"Fair"|"Good"|"Excellent"} from sleep data."""
+        if sleep.get("unavailable") or not sleep:
+            return {"score": None, "label": None}
+
+        total_min = sleep.get("total_minutes") or 0
+        hours = total_min / 60
+
+        if 7 <= hours <= 9:
+            score = 70
+        elif hours > 9:
+            score = 60
+        elif 6 <= hours < 7:
+            score = 50
+        elif 5 <= hours < 6:
+            score = 35
+        elif 4 <= hours < 5:
+            score = 20
+        elif hours > 0:
+            score = max(5, int(hours * 5))
+        else:
+            return {"score": None, "label": None}
+
+        stages = sleep.get("stages", {})
+        if stages and total_min > 0:
+            deep_min = stages.get("deep", 0)
+            rem_min = stages.get("rem", 0)
+            deep_pct = deep_min / total_min * 100
+            rem_pct = rem_min / total_min * 100
+            if deep_pct >= 20:
+                score += 15
+            elif deep_pct >= 13:
+                score += 10
+            elif deep_pct >= 8:
+                score += 5
+            if rem_pct >= 22:
+                score += 15
+            elif rem_pct >= 15:
+                score += 10
+            elif rem_pct >= 10:
+                score += 5
+
+        score = min(100, score)
+        if score >= 90:
+            label = "Excellent"
+        elif score >= 75:
+            label = "Good"
+        elif score >= 60:
+            label = "Fair"
+        else:
+            label = "Poor"
+        return {"score": score, "label": label}
 
 
 google_fit = GoogleFit()

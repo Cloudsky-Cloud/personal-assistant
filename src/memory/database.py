@@ -222,6 +222,33 @@ class Database:
             row = await cur.fetchone()
         return dict(row) if row else None
 
+    async def save_sleep_score(
+        self,
+        date_str: str,
+        sleep_score: int,
+        sleep_label: str,
+        in_bed_minutes: Optional[int] = None,
+    ):
+        await self._db.execute(
+            """INSERT INTO energy_scores (date, score, level, sleep_score, sleep_label, in_bed_minutes)
+               VALUES (?, 0, 'unknown', ?, ?, ?)
+               ON CONFLICT(date) DO UPDATE SET
+               sleep_score=excluded.sleep_score,
+               sleep_label=excluded.sleep_label,
+               in_bed_minutes=excluded.in_bed_minutes""",
+            (date_str, sleep_score, sleep_label, in_bed_minutes),
+        )
+        await self._db.commit()
+
+    async def get_sleep_score_by_date(self, date_str: str) -> Optional[dict]:
+        async with self._db.execute(
+            """SELECT date, sleep_score, sleep_label, in_bed_minutes
+               FROM energy_scores WHERE date = ?""",
+            (date_str,),
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
     # ── Briefings ──────────────────────────────────────────────────────────
 
     async def save_briefing(self, telegram_id: int, content: str):

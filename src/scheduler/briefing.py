@@ -2,6 +2,7 @@ import html as _html
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 import anthropic
 import pytz
@@ -284,20 +285,25 @@ def _section_calendar(events: list[dict], tz) -> str:
     return "\n".join(lines)
 
 
+def _section_overdue(overdue: list[tuple[date, dict]]) -> str:
+    """Overdue-only block shown at the top of the briefing (issue 5)."""
+    if not overdue:
+        return ""
+    lines = ["🚨 *Overdue Tasks*"]
+    for task_date, t in sorted(overdue, key=lambda x: x[0]):
+        due_str = task_date.strftime("%b %-d")
+        lines.append(f"  • {t['title']} _(was due {due_str})_")
+    return "\n".join(lines)
+
+
 def _section_tasks(
-    overdue: list[tuple[date, dict]],
     due_today: list[dict],
     due_this_week: list[tuple[date, dict]],
 ) -> str:
-    if not overdue and not due_today and not due_this_week:
+    if not due_today and not due_this_week:
         return "✅ *Tasks*\nAll caught up! 🎉"
 
     lines = ["✅ *Tasks*"]
-    if overdue:
-        lines.append("⚠️ _Overdue:_")
-        for task_date, t in sorted(overdue, key=lambda x: x[0]):
-            due_str = task_date.strftime("%b %-d")
-            lines.append(f"  • {t['title']} _(was due {due_str})_")
     if due_today:
         lines.append("_Due today:_")
         for t in due_today:
@@ -376,8 +382,8 @@ def _energy_alert_text(score: int, level: str, sleep: dict, hr: dict, events: li
 
 
 def _section_fitness(fit: dict, energy: dict, events: list[dict], tz) -> str:
+    """8 AM fitness section — sleep data is omitted (arrives at 9:30 AM)."""
     steps = fit.get("steps", {})
-    sleep = fit.get("sleep", {})
     hr = fit.get("heart_rate", {})
     cal = fit.get("calories", {})
     active = fit.get("active_minutes", {})
@@ -395,13 +401,12 @@ def _section_fitness(fit: dict, energy: dict, events: list[dict], tz) -> str:
         pct = steps.get("goal_pct", 0)
         lines.append(f"👟 Steps: {s:,} ({pct}% of goal)")
 
-    h, m = sleep.get("hours"), sleep.get("minutes")
-    if h is not None:
-        lines.append(f"😴 Sleep: {h}h {m}m")
+    lines.append("😴 Sleep data updating shortly...")
 
-    bpm = hr.get("bpm")
-    if bpm:
-        lines.append(f"❤️ Heart rate: {bpm} bpm")
+    if hr.get("unavailable"):
+        lines.append("❤️ Heart rate: ⚠️ no data from Google Fit (check Samsung Health sync)")
+    elif hr.get("bpm"):
+        lines.append(f"❤️ Heart rate: {hr['bpm']} bpm")
 
     c = cal.get("calories")
     if c:
@@ -414,9 +419,61 @@ def _section_fitness(fit: dict, energy: dict, events: list[dict], tz) -> str:
     if len(lines) == 1:
         return ""
 
-    if score is not None:
-        lines.append("")
-        lines.append(_energy_alert_text(score, level, sleep, hr, events, tz))
+    return "\n".join(lines)
+
+
+def _section_sleep_update(sleep: dict, sleep_score_info: dict, prev_sleep_score: Optional[int]) -> str:
+    """9:30 AM sleep follow-up with richer data (issues 3 & 4)."""
+    lines = ["😴 *Sleep Update*"]
+
+    sleep_score = sleep_score_info.get("score")
+    sleep_label = sleep_score_info.get("label")
+
+    if sleep.get("unavailable") or not sleep:
+        lines.append("⚠️ No sleep data available from Samsung Health.")
+        return "\n".join(lines)
+
+    # Duration in bed vs actual sleep
+    in_bed = sleep.get("in_bed_minutes")
+    actual = sleep.get("total_minutes") or 0
+    if in_bed and in_bed > actual:
+        ib_h, ib_m = in_bed // 60, in_bed % 60
+        ac_h, ac_m = actual // 60, actual % 60
+        lines.append(f"🛏 In bed: {ib_h}h {ib_m}m · Actual sleep: {ac_h}h {ac_m}m")
+    else:
+        h = sleep.get("hours", 0) or 0
+        m = sleep.get("minutes", 0) or 0
+        lines.append(f"🛏 Sleep duration: {h}h {m}m")
+
+    # Sleep score with trend and quality label
+    if sleep_score is not None:
+        trend_str = ""
+        flag = ""
+        if prev_sleep_score is not None:
+            diff = sleep_score - prev_sleep_score
+            if diff > 0:
+                trend_str = f" ↑{diff}"
+            elif diff < 0:
+                trend_str = f" ↓{abs(diff)}"
+                if abs(diff) > 10:
+                    flag = " ⚠️"
+        lines.append(f"📊 Sleep score: {sleep_score}{trend_str} — {sleep_label}{flag}")
+
+    # Recovery label based on sleep score (issue 4)
+    if sleep_score is not None:
+        if sleep_score >= 90:
+            recovery = "🟢 *Great Recovery!*"
+            tip = "Good day for deep work and important decisions.\n🧠 Prime hours: all morning — tackle your hardest tasks first."
+        elif sleep_score >= 75:
+            recovery = "🟢 *Good Recovery*"
+            tip = "Stay consistent — you're well rested.\n🧠 Best focus window: 9 AM–noon."
+        elif sleep_score >= 60:
+            recovery = "🟡 *Fair Recovery*"
+            tip = "Stay hydrated and take short breaks between meetings.\n🧠 Best focus window: 9–11 AM."
+        else:
+            recovery = "🔴 *Poor Recovery*"
+            tip = "Defer non-critical tasks. Avoid major decisions before noon.\n🧠 Best focus window: 10–11 AM."
+        lines.append(f"\n{recovery}\n{tip}")
 
     return "\n".join(lines)
 
@@ -498,9 +555,15 @@ async def _build_briefing(tz) -> str:
         logger.warning("Briefing projects failed: %s", exc)
 
     try:
-        fit_data = google_fit.get_summary()
+        # Sleep is fetched separately at 9:30 AM — skip it here to avoid stale data
+        fit_data = {
+            "steps":          google_fit.get_steps(),
+            "sleep":          {},
+            "heart_rate":     google_fit.get_heart_rate(),
+            "calories":       google_fit.get_calories(),
+            "active_minutes": google_fit.get_active_minutes(),
+        }
         energy_data = GoogleFit.compute_energy_score(fit_data)
-        sleep_d = fit_data.get("sleep", {})
         hr_d = fit_data.get("heart_rate", {})
         steps_d = fit_data.get("steps", {})
         active_d = fit_data.get("active_minutes", {})
@@ -508,8 +571,8 @@ async def _build_briefing(tz) -> str:
             date_str=today.isoformat(),
             score=energy_data["score"],
             level=energy_data["level"],
-            sleep_hours=sleep_d.get("hours"),
-            sleep_minutes=sleep_d.get("minutes"),
+            sleep_hours=None,
+            sleep_minutes=None,
             heart_rate_bpm=hr_d.get("bpm"),
             steps=steps_d.get("steps"),
             active_minutes=active_d.get("minutes"),
@@ -562,8 +625,12 @@ async def _build_briefing(tz) -> str:
         greeting += f"\n📊 You have {', '.join(stat_parts)} today."
     parts.append(greeting)
 
-    # ── Urgency alert (prominent, right after greeting) ───────────────────────
-    # Fix 6: overdue count already appears in the header summary; don't repeat it here
+    # ── Overdue tasks immediately after summary ───────────────────────────────
+    overdue_section = _section_overdue(overdue)
+    if overdue_section:
+        parts.append(overdue_section)
+
+    # ── Urgency alert: urgent emails only (overdue now has its own section) ───
     alert_lines: list[str] = []
     for e in urgent_emails[:2]:
         subject = (e.get("subject") or "")[:50]
@@ -590,7 +657,7 @@ async def _build_briefing(tz) -> str:
 
     parts.append(_section_emails(human_emails))
     parts.append(_section_calendar(all_events, tz))
-    parts.append(_section_tasks(overdue, due_today, due_this_week))
+    parts.append(_section_tasks(due_today, due_this_week))
 
     section = _section_projects(active_projects)
     if section:
@@ -604,13 +671,53 @@ async def _build_briefing(tz) -> str:
     except Exception as exc:
         logger.warning("Briefing motivation failed: %s", exc)
 
-    text = "\n\n".join(parts)
+    text = _html.unescape("\n\n".join(parts))
     if len(text) > 4000:
         text = text[:3980] + "\n\n_...truncated_"
     return text
 
 
-# ── Public entry point (used by /briefing command) ───────────────────────────
+async def _build_sleep_update(tz) -> str:
+    today = datetime.now(tz).date()
+    yesterday = today - timedelta(days=1)
+
+    sleep: dict = {}
+    try:
+        sleep = google_fit.get_sleep()
+        logger.info("Sleep update: got sleep data — total_minutes=%s", sleep.get("total_minutes"))
+    except Exception as exc:
+        logger.warning("Sleep update: get_sleep failed: %s", exc)
+
+    sleep_score_info = GoogleFit.compute_sleep_score(sleep)
+    sleep_score = sleep_score_info.get("score")
+    sleep_label = sleep_score_info.get("label")
+
+    prev_score: Optional[int] = None
+    try:
+        prev_record = await db.get_sleep_score_by_date(yesterday.isoformat())
+        if prev_record:
+            prev_score = prev_record.get("sleep_score")
+    except Exception as exc:
+        logger.warning("Sleep update: get prev score failed: %s", exc)
+
+    if sleep_score is not None:
+        try:
+            await db.save_sleep_score(
+                date_str=today.isoformat(),
+                sleep_score=sleep_score,
+                sleep_label=sleep_label,
+                in_bed_minutes=sleep.get("in_bed_minutes"),
+            )
+        except Exception as exc:
+            logger.warning("Sleep update: save_sleep_score failed: %s", exc)
+
+    text = _html.unescape(_section_sleep_update(sleep, sleep_score_info, prev_score))
+    if len(text) > 4000:
+        text = text[:3980] + "\n\n_...truncated_"
+    return text
+
+
+# ── Public entry points ───────────────────────────────────────────────────────
 
 async def build_briefing() -> str:
     """Build and return the full briefing text in the configured timezone."""
@@ -618,7 +725,13 @@ async def build_briefing() -> str:
     return await _build_briefing(tz)
 
 
-# ── Scheduler entry point ─────────────────────────────────────────────────────
+async def build_sleep_update() -> str:
+    """Build and return the sleep follow-up message."""
+    tz = pytz.timezone(settings.timezone)
+    return await _build_sleep_update(tz)
+
+
+# ── Scheduler entry points ────────────────────────────────────────────────────
 
 async def _send_briefing(bot, telegram_id: int):
     logger.info("Sending daily briefing to user %s", telegram_id)
@@ -635,21 +748,47 @@ async def _send_briefing(bot, telegram_id: int):
         logger.error("Briefing failed for user %s: %s", telegram_id, exc)
 
 
+async def _send_sleep_update(bot, telegram_id: int):
+    logger.info("Sending sleep update to user %s", telegram_id)
+    try:
+        tz = pytz.timezone(settings.timezone)
+        text = await _build_sleep_update(tz)
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        logger.error("Sleep update failed for user %s: %s", telegram_id, exc)
+
+
 def schedule_briefings(scheduler: AsyncIOScheduler, bot):
     hour, minute = settings.briefing_time.split(":")
     tz = pytz.timezone(settings.timezone)
 
-    async def job():
+    async def briefing_job():
         user_ids = await db.get_all_user_ids()
         for uid in user_ids:
             await _send_briefing(bot, uid)
 
+    async def sleep_update_job():
+        user_ids = await db.get_all_user_ids()
+        for uid in user_ids:
+            await _send_sleep_update(bot, uid)
+
     scheduler.add_job(
-        job,
+        briefing_job,
         CronTrigger(hour=int(hour), minute=int(minute), timezone=tz),
         id="daily_briefing",
         replace_existing=True,
     )
+    scheduler.add_job(
+        sleep_update_job,
+        CronTrigger(hour=9, minute=30, timezone=tz),
+        id="sleep_update",
+        replace_existing=True,
+    )
     logger.info(
-        "Daily briefing scheduled at %s %s", settings.briefing_time, settings.timezone
+        "Daily briefing scheduled at %s %s; sleep update at 09:30 %s",
+        settings.briefing_time, settings.timezone, settings.timezone,
     )

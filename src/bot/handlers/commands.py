@@ -7,7 +7,7 @@ from ...config import settings
 from ...memory.database import db
 from ...ai.claude_client import claude_client
 from ...utils.formatting import format_task_list, truncate
-from ...scheduler.briefing import build_briefing
+from ...scheduler.briefing import build_briefing, build_sleep_update
 
 logger = logging.getLogger(__name__)
 
